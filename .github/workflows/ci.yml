@@ -56,7 +56,10 @@ jobs:
 
       - name: Run tests with coverage
         if: matrix.coverage
-        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+        # -coverpkg=./... credits cross-package coverage: the decoder internals
+        # are exercised by the pcm corpus conformance tests, not by per-package
+        # unit tests alone.
+        run: go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
         if: matrix.coverage
