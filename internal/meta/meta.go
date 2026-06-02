@@ -21,6 +21,16 @@ const (
 // and all metadata blocks, returning the STREAMINFO-derived properties. It leaves
 // the reader positioned at the first audio frame.
 func ReadMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
+	si, err := readMetadata(br)
+	if errors.Is(err, io.EOF) {
+		// Metadata always precedes the audio frames, so any EOF in this section
+		// is a truncated stream, not a clean end.
+		err = io.ErrUnexpectedEOF
+	}
+	return si, err
+}
+
+func readMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
 	if err := skipID3v2AndMagic(br); err != nil {
 		return flac.StreamInfo{}, err
 	}
@@ -110,6 +120,10 @@ func skipID3v2AndMagic(br *bitio.Reader) error {
 			return err
 		}
 		size := int(rest[2]&0x7F)<<21 | int(rest[3]&0x7F)<<14 | int(rest[4]&0x7F)<<7 | int(rest[5]&0x7F)
+		// The flags byte (rest[1]) bit 4 marks a 10-byte footer not counted in size.
+		if rest[1]&0x10 != 0 {
+			size += 10
+		}
 		if err := skipBytes(br, size); err != nil {
 			return err
 		}

@@ -3,6 +3,7 @@ package meta
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	flac "github.com/tphakala/go-flac"
@@ -68,6 +69,32 @@ func TestSkipsLeadingID3v2(t *testing.T) {
 	}
 	if si.SampleRate != 48000 || si.Channels != 1 || si.BitDepth != 24 {
 		t.Fatalf("got %+v", si)
+	}
+}
+
+func TestSkipsID3v2WithFooter(t *testing.T) {
+	core := buildStreamInfoOnly(4096, 4096, 44100, 2, 16, 0, [16]byte{})
+	// Flags byte 0x10 marks a 10-byte footer not counted in the syncsafe size.
+	id3 := make([]byte, 0, 30+len(core))
+	id3 = append(id3, 'I', 'D', '3', 0x04, 0x00, 0x10, 0x00, 0x00, 0x00, 0x0A)
+	id3 = append(id3, make([]byte, 10)...) // tag body (size = 10)
+	id3 = append(id3, make([]byte, 10)...) // footer (skipped via the footer flag)
+	id3 = append(id3, core...)
+	br := bitio.NewReader(bytes.NewReader(id3))
+	si, err := ReadMetadata(br)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if si.SampleRate != 44100 || si.Channels != 2 || si.BitDepth != 16 {
+		t.Fatalf("got %+v", si)
+	}
+}
+
+func TestTruncatedMetadataIsUnexpectedEOF(t *testing.T) {
+	// A bare stream marker with no metadata blocks is truncated, not a clean end.
+	br := bitio.NewReader(bytes.NewReader([]byte("fLaC")))
+	if _, err := ReadMetadata(br); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("want io.ErrUnexpectedEOF, got %v", err)
 	}
 }
 

@@ -35,8 +35,9 @@ import "github.com/tphakala/go-flac/pcm"
 // Decoder: implemented now.
 dec, err := pcm.NewDecoder(r)
 // dec implements io.Reader and io.WriterTo, yielding interleaved little-endian
-// PCM. dec.Info() returns the stream's STREAMINFO properties. SeekToSample
-// returns ErrSeekUnsupported until M4.
+// PCM. dec.Info() returns the stream's STREAMINFO properties. Until M4,
+// SeekToSample returns ErrSeekUnsupported for non-seekable sources and
+// ErrNotImplemented otherwise.
 
 // Encoder: planned for M3.
 enc, err := pcm.NewEncoder(w, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2})

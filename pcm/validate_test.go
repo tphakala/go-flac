@@ -2,11 +2,13 @@ package pcm
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestCrossValidateLibFLAC decodes every subset corpus file with our decoder and
@@ -45,12 +47,18 @@ func TestCrossValidateLibFLAC(t *testing.T) {
 			if _, err := io.Copy(&ours, d); err != nil {
 				t.Fatalf("our decode: %v", err)
 			}
-			// flac -d to raw, little-endian signed, on stdout.
-			cmd := exec.Command(flacBin, "-d", "--silent", "--force-raw-format",
+			// flac -d to raw, little-endian signed, on stdout. Bound the
+			// subprocess so a hung flac cannot stall the test, and surface its
+			// stderr in the failure message.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, flacBin, "-d", "--silent", "--force-raw-format",
 				"--endian=little", "--sign=signed", "-c", p)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
 			ref, err := cmd.Output()
 			if err != nil {
-				t.Fatalf("flac -d: %v", err)
+				t.Fatalf("flac -d: %v: %s", err, stderr.String())
 			}
 			if !bytes.Equal(ours.Bytes(), ref) {
 				t.Fatalf("%s: PCM differs (ours %d bytes, flac %d bytes)", p, ours.Len(), len(ref))
