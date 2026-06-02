@@ -118,6 +118,12 @@ func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPart
 		n := partLen
 		if p == 0 {
 			n -= predOrder
+			if n < 0 {
+				// planResidual never selects an order where the first partition is
+				// shorter than predOrder; this guards a future predictor (LPC) whose
+				// order could exceed a tiny partition length.
+				n = 0
+			}
 		}
 		pl := plans[p]
 		written += paramBits + pl.payload

@@ -159,8 +159,9 @@ func TestEncodeNonSeekableUnknownSentinels(t *testing.T) {
 func TestNewEncoderRejectsBadConfig(t *testing.T) {
 	bad := []Config{
 		{SampleRate: 0, BitDepth: 16, Channels: 2},
-		{SampleRate: 44100, BitDepth: 3, Channels: 2},  // below 4
-		{SampleRate: 44100, BitDepth: 32, Channels: 2}, // above 24 (M3 scope)
+		{SampleRate: 700000, BitDepth: 16, Channels: 2}, // above the FLAC 655350 max
+		{SampleRate: 44100, BitDepth: 3, Channels: 2},   // below 4
+		{SampleRate: 44100, BitDepth: 32, Channels: 2},  // above 24 (M3 scope)
 		{SampleRate: 44100, BitDepth: 16, Channels: 0},
 		{SampleRate: 44100, BitDepth: 16, Channels: 9},
 	}
@@ -185,5 +186,41 @@ func TestEncoderWriteAfterCloseErrors(t *testing.T) {
 	_, werr := enc.Write([]byte{0, 0, 0, 0})
 	if !errors.Is(werr, flac.ErrEncoderClosed) {
 		t.Fatalf("Write after Close = %v, want ErrEncoderClosed", werr)
+	}
+}
+
+// TestEncodeOutOfRangePCMNoPanic feeds non-byte-aligned-depth PCM whose samples
+// exceed the declared bit depth so that every sample shares more trailing zero
+// bits than the bit depth (wasted >= bps). Before the wasted clamp in
+// planSubframe this underflowed bps-wasted to a huge shift width and hung; the
+// encode must now complete and the stream must stay structurally decodable.
+func TestEncodeOutOfRangePCMNoPanic(t *testing.T) {
+	const bps = 12 // bytesPS 2, so 16-bit input samples can exceed the 12-bit range
+	cfg := Config{SampleRate: 44100, BitDepth: bps, Channels: 1, CompressionLevel: 5}
+	// Samples are multiples of 2^13 (8192, 16384, 24576): non-constant, all with
+	// at least 13 trailing zeros, i.e. wasted (13) > bps (12).
+	vals := []int16{8192, 16384, 24576}
+	raw := make([]byte, 0, 600)
+	for i := range 300 {
+		v := uint16(vals[i%len(vals)])
+		raw = append(raw, byte(v), byte(v>>8))
+	}
+
+	var buf bytes.Buffer // non-seekable: STREAMINFO MD5 stays the unknown sentinel
+	enc, err := NewEncoder(&buf, cfg)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	if _, err := enc.Write(raw); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The stream is lossy for this out-of-range input, but it must decode without
+	// a panic or error (the unknown MD5 means the decoder skips the MD5 check).
+	if _, got := decodeAll(t, bytes.NewReader(buf.Bytes())); len(got) == 0 {
+		t.Fatal("decoded zero bytes from out-of-range encode")
 	}
 }

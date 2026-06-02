@@ -38,12 +38,14 @@ func EncodeStreamInfo(si flac.StreamInfo, minBlock, maxBlock, minFrame, maxFrame
 // block (last-block flag set) carrying body.
 func WriteStreamHeader(w io.Writer, body []byte) error {
 	hdr := make([]byte, 0, StreamInfoBodyOffset+len(body))
-	hdr = append(hdr, 'f', 'L', 'a', 'C')
-	bh := bitio.NewWriter()
-	bh.WriteBits(1, 1)                      // last metadata block
-	bh.WriteBits(uint64(typeStreamInfo), 7) // block type 0
-	bh.WriteBits(uint64(len(body)), 24)     // body length
-	hdr = append(hdr, bh.Bytes()...)
+	// "fLaC" marker, then the 4-byte metadata block header: last-block flag (1) |
+	// 7-bit block type, then a 24-bit big-endian body length.
+	hdr = append(hdr, 'f', 'L', 'a', 'C',
+		0x80|byte(typeStreamInfo),
+		byte(len(body)>>16),
+		byte(len(body)>>8),
+		byte(len(body)),
+	)
 	hdr = append(hdr, body...)
 	_, err := w.Write(hdr)
 	return err

@@ -68,6 +68,13 @@ func planSubframe(s []int32, bps int, p Params) subframePlan {
 		return subframePlan{kind: 0, bits: 1 + 6 + 1 + bps}
 	}
 	wasted := wastedBits(s)
+	if wasted >= bps {
+		// Defend against out-of-range input (samples wider than bps, possible only
+		// when the caller supplies PCM that does not fit the declared bit depth):
+		// keep at least one value bit so bps-wasted stays positive and the shift
+		// widths below cannot underflow. In-range input always has wasted < bps.
+		wasted = bps - 1
+	}
 	eff := bps - wasted
 	hdrBits := 1 + 6 + 1 // pad + type + wasted flag
 	if wasted > 0 {

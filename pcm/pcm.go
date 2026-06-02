@@ -10,8 +10,10 @@ type Config struct {
 	// matching libFLAC's level meaning. The zero value is level 0. In this release
 	// the encoder is fixed-predictor only: levels 0-2 are fully realized (0 codes
 	// channels independently, 1 uses adaptive mid-side, 2 searches all stereo
-	// modes); levels 3-8 set deeper residual-partition search but do not yet enable
-	// LPC, so they currently compress about like level 2 and improve automatically
-	// when LPC lands. Out-of-range values are clamped to 0-8.
+	// modes). Levels 3-8 add deeper residual-partition search and, from level 4,
+	// exhaustive fixed-order selection, so they compress somewhat better than level
+	// 2; the larger gain from LPC is deferred to a later release, at which point
+	// levels 3-8 improve automatically with no API change. Out-of-range values are
+	// clamped to 0-8.
 	CompressionLevel int
 }

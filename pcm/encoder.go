@@ -23,6 +23,7 @@ type Encoder struct {
 	w        io.Writer
 	ws       io.WriteSeeker // non-nil when w is seekable
 	cfg      Config
+	si       flac.StreamInfo // stream properties, built once from cfg
 	params   frame.Params
 	bytesPS  int
 	frameLen int // bytesPS * channels (bytes per inter-channel sample)
@@ -52,7 +53,9 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 	if w == nil {
 		return nil, errors.New("go-flac/pcm: NewEncoder: nil writer")
 	}
-	if cfg.SampleRate <= 0 || cfg.Channels < 1 || cfg.Channels > 8 {
+	if cfg.SampleRate <= 0 || cfg.SampleRate > 655350 || cfg.Channels < 1 || cfg.Channels > 8 {
+		// 655350 Hz is the FLAC maximum; the STREAMINFO sample-rate field is 20 bits,
+		// so a larger rate would be silently truncated.
 		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: invalid config %+v", cfg)
 	}
 	if cfg.BitDepth < 4 || cfg.BitDepth > 24 {
@@ -62,6 +65,7 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 	e := &Encoder{
 		w:       w,
 		cfg:     cfg,
+		si:      flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth},
 		params:  paramsForLevel(cfg.CompressionLevel),
 		bytesPS: (cfg.BitDepth + 7) / 8,
 		bw:      bitio.NewWriter(),
@@ -76,8 +80,7 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		e.ws = ws
 	}
 
-	si := flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth}
-	body := meta.EncodeStreamInfo(si, 0, 0, 0, 0) // placeholders
+	body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders
 	if err := meta.WriteStreamHeader(w, body); err != nil {
 		return nil, err
 	}
@@ -117,8 +120,7 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	}
 	deinterleaveSamples(e.ch, chunk, n, e.cfg.Channels, e.bytesPS)
 
-	si := flac.StreamInfo{SampleRate: e.cfg.SampleRate, Channels: e.cfg.Channels, BitDepth: e.cfg.BitDepth}
-	buf := frame.EncodeFrame(e.bw, e.params, si, e.ch, e.frameNum)
+	buf := frame.EncodeFrame(e.bw, e.params, e.si, e.ch, e.frameNum)
 	if _, err := e.w.Write(buf); err != nil {
 		return err
 	}
@@ -162,24 +164,18 @@ func (e *Encoder) Close() error {
 	if e.ws == nil {
 		return nil // non-seekable: keep the unknown sentinels written up front
 	}
-	var sum [16]byte
-	copy(sum[:], e.md5.Sum(nil))
-	si := flac.StreamInfo{
-		SampleRate:   e.cfg.SampleRate,
-		Channels:     e.cfg.Channels,
-		BitDepth:     e.cfg.BitDepth,
-		TotalSamples: e.total,
-		MD5:          sum,
-	}
+	si := e.si
+	si.TotalSamples = e.total
+	copy(si.MD5[:], e.md5.Sum(nil))
 	body := meta.EncodeStreamInfo(si, e.minBlock, e.maxBlock, e.minFrame, e.maxFrame)
 	if _, err := e.ws.Seek(int64(meta.StreamInfoBodyOffset), io.SeekStart); err != nil {
-		return err
+		return fmt.Errorf("go-flac/pcm: Close: seek to STREAMINFO: %w", err)
 	}
 	if _, err := e.ws.Write(body); err != nil {
-		return err
+		return fmt.Errorf("go-flac/pcm: Close: patch STREAMINFO: %w", err)
 	}
 	if _, err := e.ws.Seek(0, io.SeekEnd); err != nil {
-		return err
+		return fmt.Errorf("go-flac/pcm: Close: seek to end: %w", err)
 	}
 	return nil
 }

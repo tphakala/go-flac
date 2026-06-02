@@ -13,7 +13,8 @@ type Writer struct {
 func NewWriter() *Writer { return &Writer{} }
 
 // WriteBits writes the low n bits of v, most-significant bit first. n must be in
-// 0..57 (callers write at most 33). Bits above bit n-1 of v are ignored.
+// 0..57 (existing callers write at most 36, the STREAMINFO total-samples field).
+// Bits above bit n-1 of v are ignored.
 func (w *Writer) WriteBits(v uint64, n uint) {
 	if n == 0 {
 		return

@@ -26,9 +26,10 @@ panic-freedom.
 `pcm.NewEncoder` (M3) encodes interleaved little-endian PCM to FLAC. It supports
 bit depths 4-24, constant/verbatim/fixed predictors, full four-way stereo
 decorrelation (independent, left-side, right-side, mid-side), and the 0-8
-compression-level API. LPC predictors and the additional compression that
-levels 3-8 promise are deferred to M3b; those levels currently compress about
-like level 2 and will improve automatically when LPC lands.
+compression-level API. Levels 3-8 already use deeper residual-partition search
+and exhaustive fixed-order selection, so they compress somewhat better than level
+2; the larger gain from LPC predictors is deferred to M3b, at which point those
+levels improve automatically with no API change.
 
 - M1 Groundwork: skeleton, tooling, CI. (done)
 - M2 Decoder: bitstream, metadata, frame decode, Rice + predictor restore,
@@ -89,20 +90,48 @@ func main() {
 Encode interleaved little-endian PCM to a FLAC file:
 
 ```go
-enc, err := pcm.NewEncoder(out, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5})
-if err != nil {
-	log.Fatal(err)
-}
-if _, err := io.Copy(enc, pcmReader); err != nil {
-	log.Fatal(err)
-}
-if err := enc.Close(); err != nil {
-	log.Fatal(err)
+package main
+
+import (
+	"io"
+	"log"
+	"os"
+
+	"github.com/tphakala/go-flac/pcm"
+)
+
+func main() {
+	// pcmReader is any io.Reader of interleaved little-endian PCM matching the
+	// Config below; here it is a raw PCM file.
+	pcmReader, err := os.Open("input.pcm")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer pcmReader.Close()
+
+	// out is an *os.File (an io.WriteSeeker) so Close can finalize the STREAMINFO
+	// MD5, total-sample count, and frame sizes.
+	out, err := os.Create("output.flac")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer out.Close()
+
+	enc, err := pcm.NewEncoder(out, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := io.Copy(enc, pcmReader); err != nil {
+		log.Fatal(err)
+	}
+	if err := enc.Close(); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
 
-`out` should be an `io.WriteSeeker` (for example an `*os.File`) so the encoder
-can finalize the STREAMINFO MD5, total-sample count, and frame sizes when
+Pass an `io.WriteSeeker` (for example an `*os.File`) as the destination so the
+encoder can finalize the STREAMINFO MD5, total-sample count, and frame sizes when
 `Close` is called. A non-seekable writer still produces a valid FLAC stream, but
 those fields are left as "unknown".
 

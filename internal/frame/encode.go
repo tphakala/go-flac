@@ -28,6 +28,16 @@ func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, f
 	return bw.Bytes()
 }
 
+// Channel assignment codes written in the frame header (inverse of the decoder's
+// decodeStereoDecorrelated). Codes 0..7 are that many independent channels; 8..10
+// are the stereo decorrelations.
+const (
+	chIndependent2 = 1  // two independent channels (left/right)
+	chLeftSide     = 8  // left at bps, side (left-right) at bps+1
+	chRightSide    = 9  // side at bps+1, right at bps
+	chMidSide      = 10 // mid at bps, side at bps+1
+)
+
 // encodeStereo selects a channel assignment by estimated bits and writes it.
 func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNum uint64) {
 	side := make([]int32, bs)
@@ -47,35 +57,36 @@ func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNu
 	rs := planS.bits + planR.bits
 	ms := planM.bits + planS.bits
 
-	// Choose chCode and the two subframes per the stereo mode.
-	chCode := 1 // independent (channel assignment code 1 = 2 independent channels)
-	best := indep
+	// Choose chCode by minimum estimated cost. minCost tracks the running best;
+	// each branch updates it only when a later comparison still reads it, so there
+	// is no dead final write.
+	chCode := chIndependent2
+	minCost := indep
 	if p.Stereo == StereoAdaptive {
-		if ms < best {
-			best, chCode = ms, 10
+		if ms < minCost {
+			chCode = chMidSide
 		}
 	} else { // StereoFull
-		if ls < best {
-			best, chCode = ls, 8
+		if ls < minCost {
+			minCost, chCode = ls, chLeftSide
 		}
-		if rs < best {
-			best, chCode = rs, 9
+		if rs < minCost {
+			minCost, chCode = rs, chRightSide
 		}
-		if ms < best {
-			best, chCode = ms, 10
+		if ms < minCost {
+			chCode = chMidSide
 		}
 	}
-	_ = best // used only for comparisons above; suppress unused-write lint
 
 	writeFrameHeader(bw, bs, chCode, frameNum)
 	switch chCode {
-	case 8: // left/side: left at bps, side at bps+1
+	case chLeftSide:
 		writeSubframe(bw, l, bps, planL, p)
 		writeSubframe(bw, side, bps+1, planS, p)
-	case 9: // right/side: side at bps+1, right at bps
+	case chRightSide:
 		writeSubframe(bw, side, bps+1, planS, p)
 		writeSubframe(bw, r, bps, planR, p)
-	case 10: // mid/side: mid at bps, side at bps+1
+	case chMidSide:
 		writeSubframe(bw, mid, bps, planM, p)
 		writeSubframe(bw, side, bps+1, planS, p)
 	default: // independent
