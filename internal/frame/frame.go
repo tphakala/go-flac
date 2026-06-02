@@ -1,20 +1,26 @@
 package frame
 
 import (
+	"errors"
 	"fmt"
+	"io"
 
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
 	"github.com/tphakala/go-flac/internal/crc"
 )
 
-// Frame holds one decoded FLAC frame. Channels is reused across Decode calls.
+// Frame holds one decoded FLAC frame. Channels and the decorrelation scratch
+// buffers are reused across Decode calls.
 type Frame struct {
 	BlockSize     int
 	SampleRate    int
 	BitsPerSample int
 	Channels      [][]int32 // len == number of channels; each len == BlockSize
 	Number        uint64    // sample number (variable blocksize) or frame number (fixed)
+
+	work32 [2][]int32 // reusable stereo-decorrelation scratch (common path)
+	work64 [2][]int64 // reusable scratch for the 32-bps side-channel path
 }
 
 // header holds the parsed frame header.
@@ -39,16 +45,24 @@ func (h *header) channels() int {
 
 // Decode decodes exactly one frame from br into dst. dst.Channels is grown/reused
 // to hold the frame's channels at its block size.
-func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) error {
+func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	var c16 uint16
 	defer br.SetTap(nil)
 
 	// readHeaderKeepingTap installs a combined CRC-8 (header) + CRC-16 (frame)
-	// tap and verifies the header CRC-8 internally.
+	// tap and verifies the header CRC-8 internally. A clean end of stream surfaces
+	// here as io.EOF (the sync read hit EOF at a frame boundary).
 	var hdr header
 	if err := readHeaderKeepingTap(br, si, &hdr, &c16); err != nil {
 		return err
 	}
+	// Past the header we are committed to a frame, so an EOF in the body is a
+	// truncated frame, not a clean end of stream.
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
 	// The header CRC-8 is finalized; the frame body only feeds the CRC-16, so
 	// drop the now-unused CRC-8 update from the tap for the rest of the frame.
 	br.SetTap(func(b byte) { c16 = crc.Update16(c16, b) })
@@ -104,8 +118,12 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 	out0, out1 := dst.Channels[0][:bs], dst.Channels[1][:bs]
 
 	if bps == 32 {
-		a := make([]int64, bs)
-		b := make([]int64, bs)
+		if cap(dst.work64[0]) < bs {
+			dst.work64[0] = make([]int64, bs)
+			dst.work64[1] = make([]int64, bs)
+		}
+		a := dst.work64[0][:bs]
+		b := dst.work64[1][:bs]
 		switch hdr.channelAssignment {
 		case 8: // left/side
 			if err := decodeSubframe64(br, a, bps); err != nil {
@@ -135,8 +153,12 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 		return nil
 	}
 
-	a := make([]int32, bs)
-	b := make([]int32, bs)
+	if cap(dst.work32[0]) < bs {
+		dst.work32[0] = make([]int32, bs)
+		dst.work32[1] = make([]int32, bs)
+	}
+	a := dst.work32[0][:bs]
+	b := dst.work32[1][:bs]
 	switch hdr.channelAssignment {
 	case 8:
 		if err := decodeSubframe(br, a, bps); err != nil {

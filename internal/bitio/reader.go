@@ -2,8 +2,8 @@ package bitio
 
 import (
 	"bufio"
-	"errors"
 	"io"
+	"math/bits"
 )
 
 // Reader reads bits MSB-first from an underlying byte source, the bit order FLAC
@@ -40,9 +40,9 @@ func (r *Reader) loadByte() error {
 	}
 	b, err := r.src.ReadByte()
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			err = io.ErrUnexpectedEOF
-		}
+		// Return io.EOF unchanged so callers can distinguish a clean end at a
+		// byte boundary from a mid-read truncation; the frame decoder converts
+		// EOF to io.ErrUnexpectedEOF once it has committed to reading a frame.
 		r.err = err
 		return err
 	}
@@ -67,8 +67,8 @@ func (r *Reader) ReadBits(n uint) (uint64, error) {
 		// Top `take` bits of the `nbit` valid low bits of cur.
 		shift := r.nbit - take
 		mask := byte((1 << take) - 1)
-		bits := (r.cur >> shift) & mask
-		out = (out << take) | uint64(bits)
+		chunk := (r.cur >> shift) & mask
+		out = (out << take) | uint64(chunk)
 		r.nbit -= take
 		n -= take
 		if r.nbit == 0 && r.tap != nil {
@@ -92,7 +92,9 @@ func (r *Reader) ReadSigned(n uint) (int64, error) {
 }
 
 // ReadUnary counts zero bits up to and including the terminating one bit and
-// returns the count of zeros.
+// returns the count of zeros. It skips runs of zeros within the current byte in
+// one step via bits.LeadingZeros8, which matters because residual decoding calls
+// it per sample.
 func (r *Reader) ReadUnary() (uint64, error) {
 	var zeros uint64
 	for {
@@ -101,18 +103,27 @@ func (r *Reader) ReadUnary() (uint64, error) {
 				return 0, err
 			}
 		}
-		// Scan the valid low bits of cur from the top.
-		for r.nbit > 0 {
-			bit := (r.cur >> (r.nbit - 1)) & 1
-			r.nbit--
-			if r.nbit == 0 && r.tap != nil {
+		// Consider only the valid low nbit bits of cur.
+		mask := byte((1 << r.nbit) - 1)
+		val := r.cur & mask
+		if val == 0 {
+			// All remaining valid bits are zero; consume them and load more.
+			zeros += uint64(r.nbit)
+			r.nbit = 0
+			if r.tap != nil {
 				r.tap(r.cur)
 			}
-			if bit == 1 {
-				return zeros, nil
-			}
-			zeros++
+			continue
 		}
+		// LeadingZeros8 counts from bit 7; subtract the (8-nbit) always-zero high
+		// bits to get the zeros above the terminating one within the valid region.
+		lz := bits.LeadingZeros8(val) - (8 - int(r.nbit))
+		zeros += uint64(lz)
+		r.nbit -= uint(lz) + 1
+		if r.nbit == 0 && r.tap != nil {
+			r.tap(r.cur)
+		}
+		return zeros, nil
 	}
 }
 

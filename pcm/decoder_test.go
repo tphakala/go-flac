@@ -114,3 +114,17 @@ func TestSeekToSampleSeekableNotImplemented(t *testing.T) {
 		t.Fatalf("seekable source: want ErrNotImplemented, got %v", err)
 	}
 }
+
+func TestDecoderTruncatedFrameErrors(t *testing.T) {
+	// Cut the single frame off mid-body. Even with a zero STREAMINFO MD5 (so the
+	// MD5 check is skipped), the truncation must surface as an error rather than a
+	// clean end of stream.
+	full := buildStream()
+	d, err := NewDecoder(bytes.NewReader(full[:len(full)-4]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(d); err == nil {
+		t.Fatal("want an error decoding a truncated frame, got nil")
+	}
+}

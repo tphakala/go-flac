@@ -80,7 +80,9 @@ func (d *Decoder) decodeNextFrame() error {
 	}
 	err := frame.Decode(d.br, d.info, &d.frame)
 	if err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		// Only a clean io.EOF at a frame boundary ends the stream; a mid-frame
+		// io.ErrUnexpectedEOF is a truncation and propagates as a real error.
+		if errors.Is(err, io.EOF) {
 			return d.finish()
 		}
 		d.err = err

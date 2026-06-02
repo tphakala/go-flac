@@ -1,7 +1,9 @@
 package frame
 
 import (
+	"errors"
 	"fmt"
+	"io"
 
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
@@ -36,7 +38,7 @@ func readHeaderKeepingTap(br *bitio.Reader, si flac.StreamInfo, hdr *header, c16
 // readHeaderBody reads the frame header fields and verifies the header CRC-8 using
 // the running value pointed to by c8. The caller installs the tap that maintains
 // c8 (and optionally the frame CRC-16) before calling.
-func readHeaderBody(br *bitio.Reader, si flac.StreamInfo, hdr *header, c8 *uint8) error {
+func readHeaderBody(br *bitio.Reader, si flac.StreamInfo, hdr *header, c8 *uint8) (err error) {
 	sync, err := br.ReadBits(14)
 	if err != nil {
 		return err
@@ -44,6 +46,13 @@ func readHeaderBody(br *bitio.Reader, si flac.StreamInfo, hdr *header, c8 *uint8
 	if sync != syncCode {
 		return fmt.Errorf("frame: bad sync %#x: %w", sync, flac.ErrUnsupported)
 	}
+	// Past the sync code we are committed to a frame, so any EOF now is a
+	// truncated header, not a clean end of stream.
+	defer func() {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
 	if r, err := br.ReadBits(1); err != nil {
 		return err
 	} else if r != 0 {

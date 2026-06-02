@@ -135,7 +135,10 @@ func decodeLPC[T rice.Sample](br *bitio.Reader, dst []T, order, bps int) error {
 	if shiftSigned < 0 {
 		return fmt.Errorf("subframe: negative qlp shift %d: %w", shiftSigned, flac.ErrUnsupported)
 	}
-	coeffs := make([]int32, order)
+	// LPC order is at most 32, so a fixed stack array avoids a per-subframe heap
+	// allocation; RestoreLPC only reads coeffs, so the slice does not escape.
+	var coeffsBuf [32]int32
+	coeffs := coeffsBuf[:order]
 	for i := range coeffs {
 		c, err := br.ReadSigned(uint(precision))
 		if err != nil {
