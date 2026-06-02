@@ -4,6 +4,8 @@ import (
 	"math/bits"
 
 	"github.com/tphakala/go-flac/internal/bitio"
+	"github.com/tphakala/go-flac/internal/lpc"
+	"github.com/tphakala/go-flac/internal/rice"
 )
 
 // wastedBits returns the number of low-order zero bits common to every sample.
@@ -50,4 +52,101 @@ func writeVerbatim(bw *bitio.Writer, s []int32, wasted, bps int) {
 	for _, v := range s {
 		bw.WriteSignedBits(int64(v>>uint(wasted)), eff)
 	}
+}
+
+// subframePlan records the chosen encoding of one subframe signal.
+type subframePlan struct {
+	kind   int // 0 constant, 1 verbatim, 2 fixed
+	order  int // fixed predictor order (kind == 2)
+	wasted int
+	bits   int // estimated total subframe bits, for decorrelation selection
+}
+
+// planSubframe chooses the cheapest subframe encoding for s at the given bps.
+func planSubframe(s []int32, bps int, p Params) subframePlan {
+	if allEqual(s) {
+		return subframePlan{kind: 0, bits: 1 + 6 + 1 + bps}
+	}
+	wasted := wastedBits(s)
+	eff := bps - wasted
+	hdrBits := 1 + 6 + 1 // pad + type + wasted flag
+	if wasted > 0 {
+		hdrBits += wasted // unary (wasted-1 zeros + 1)
+	}
+	shifted := shiftRight(s, wasted)
+	order := chooseFixedOrder(shifted, p)
+	res := make([]int32, len(shifted)-order)
+	lpc.ComputeFixedResiduals(res, shifted, order)
+	fixedBits := hdrBits + order*eff + rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder)
+	verbatimBits := hdrBits + len(s)*eff
+	if verbatimBits <= fixedBits {
+		return subframePlan{kind: 1, wasted: wasted, bits: verbatimBits}
+	}
+	return subframePlan{kind: 2, order: order, wasted: wasted, bits: fixedBits}
+}
+
+// writeSubframe writes s according to plan.
+func writeSubframe(bw *bitio.Writer, s []int32, bps int, plan subframePlan, p Params) {
+	switch plan.kind {
+	case 0:
+		writeConstant(bw, s[0], 0, bps)
+	case 1:
+		writeVerbatim(bw, s, plan.wasted, bps)
+	default:
+		writeFixed(bw, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
+	}
+}
+
+// writeFixed writes a fixed-predictor subframe of the given order.
+func writeFixed(bw *bitio.Writer, s []int32, order, wasted, bps, maxPartOrder int) {
+	writeSubframeHeader(bw, 8+order, wasted)
+	eff := uint(bps - wasted)
+	shifted := shiftRight(s, wasted)
+	for i := range order {
+		bw.WriteSignedBits(int64(shifted[i]), eff)
+	}
+	res := make([]int32, len(shifted)-order)
+	lpc.ComputeFixedResiduals(res, shifted, order)
+	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder)
+}
+
+// chooseFixedOrder returns the fixed predictor order to use for shifted.
+func chooseFixedOrder(shifted []int32, p Params) int {
+	if p.ExhaustiveFixed {
+		bestOrder, bestBits := 0, int(^uint(0)>>1)
+		maxOrder := min(4, len(shifted)-1)
+		for o := 0; o <= maxOrder; o++ {
+			res := make([]int32, len(shifted)-o)
+			lpc.ComputeFixedResiduals(res, shifted, o)
+			b := rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder)
+			if b < bestBits {
+				bestBits, bestOrder = b, o
+			}
+		}
+		return bestOrder
+	}
+	return lpc.BestFixedOrder(shifted, 4)
+}
+
+// allEqual reports whether every element of s is the same value.
+func allEqual(s []int32) bool {
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// shiftRight returns a new slice with every element of s shifted right by
+// wasted bits. Returns s directly when wasted is zero.
+func shiftRight(s []int32, wasted int) []int32 {
+	if wasted == 0 {
+		return s
+	}
+	out := make([]int32, len(s))
+	for i, v := range s {
+		out[i] = v >> uint(wasted)
+	}
+	return out
 }
