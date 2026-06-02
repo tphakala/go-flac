@@ -23,6 +23,15 @@ func TestStreamInfoZeroValue(t *testing.T) {
 	}
 }
 
+func TestEncoderSentinelDistinct(t *testing.T) {
+	if flac.ErrEncoderClosed == nil {
+		t.Fatal("ErrEncoderClosed is nil")
+	}
+	if errors.Is(flac.ErrEncoderClosed, flac.ErrNotImplemented) {
+		t.Error("ErrEncoderClosed aliases ErrNotImplemented")
+	}
+}
+
 func TestSentinelErrorsAreDistinct(t *testing.T) {
 	errs := []error{
 		flac.ErrSeekUnsupported, flac.ErrMissingStreamInfo,
