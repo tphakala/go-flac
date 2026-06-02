@@ -40,12 +40,26 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Install libFLAC tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y flac
+
       - name: Run tests
         run: go test -race ./...
 
+      - name: Fuzz seed corpora (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          go test ./internal/bitio/ -run FuzzReadBits
+          go test ./internal/meta/ -run FuzzReadMetadata
+          go test ./internal/frame/ -run FuzzDecode
+
       - name: Run tests with coverage
         if: matrix.coverage
-        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+        # -coverpkg=./... credits cross-package coverage: the decoder internals
+        # are exercised by the pcm corpus conformance tests, not by per-package
+        # unit tests alone.
+        run: go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
         if: matrix.coverage

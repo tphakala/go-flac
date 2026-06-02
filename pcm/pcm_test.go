@@ -43,10 +43,3 @@ func TestNewDecoderRejectsNilReader(t *testing.T) {
 		t.Fatal("expected error for nil reader")
 	}
 }
-
-func TestNewDecoderNotImplemented(t *testing.T) {
-	_, err := pcm.NewDecoder(bytes.NewReader([]byte{}))
-	if !errors.Is(err, flac.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got %v", err)
-	}
-}
