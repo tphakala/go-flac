@@ -94,6 +94,9 @@ func readWastedBits(br *bitio.Reader) (int, error) {
 }
 
 func decodeWarmup[T rice.Sample](br *bitio.Reader, dst []T, order, bps int) error {
+	if order > len(dst) {
+		return fmt.Errorf("subframe: predictor order %d exceeds block size %d: %w", order, len(dst), flac.ErrUnsupported)
+	}
 	for i := range order {
 		v, err := br.ReadSigned(uint(bps))
 		if err != nil {
