@@ -81,10 +81,8 @@ func planSubframe(s []int32, bps int, p Params) subframePlan {
 		hdrBits += wasted // unary (wasted-1 zeros + 1)
 	}
 	shifted := shiftRight(s, wasted)
-	order := chooseFixedOrder(shifted, p)
-	res := make([]int32, len(shifted)-order)
-	lpc.ComputeFixedResiduals(res, shifted, order)
-	fixedBits := hdrBits + order*eff + rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder)
+	order, resBits := chooseFixedOrder(shifted, p)
+	fixedBits := hdrBits + order*eff + resBits
 	verbatimBits := hdrBits + len(s)*eff
 	if verbatimBits <= fixedBits {
 		return subframePlan{kind: 1, wasted: wasted, bits: verbatimBits}
@@ -117,22 +115,28 @@ func writeFixed(bw *bitio.Writer, s []int32, order, wasted, bps, maxPartOrder in
 	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder)
 }
 
-// chooseFixedOrder returns the fixed predictor order to use for shifted.
-func chooseFixedOrder(shifted []int32, p Params) int {
+// chooseFixedOrder returns the fixed predictor order to use for shifted together
+// with the Rice cost (in bits) of that order's residuals, so the caller does not
+// have to recompute the residuals to learn their cost.
+func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
 		maxOrder := min(4, len(shifted)-1)
+		res := make([]int32, len(shifted)) // reused across orders
 		for o := 0; o <= maxOrder; o++ {
-			res := make([]int32, len(shifted)-o)
-			lpc.ComputeFixedResiduals(res, shifted, o)
-			b := rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder)
+			r := res[:len(shifted)-o]
+			lpc.ComputeFixedResiduals(r, shifted, o)
+			b := rice.CostResidual(r, len(shifted), o, p.MaxPartitionOrder)
 			if b < bestBits {
 				bestBits, bestOrder = b, o
 			}
 		}
-		return bestOrder
+		return bestOrder, bestBits
 	}
-	return lpc.BestFixedOrder(shifted, 4)
+	order = lpc.BestFixedOrder(shifted, 4)
+	res := make([]int32, len(shifted)-order)
+	lpc.ComputeFixedResiduals(res, shifted, order)
+	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder)
 }
 
 // allEqual reports whether every element of s is the same value.
