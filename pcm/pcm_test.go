@@ -2,10 +2,8 @@ package pcm_test
 
 import (
 	"bytes"
-	"errors"
 	"testing"
 
-	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/pcm"
 )
 
@@ -28,13 +26,6 @@ func TestNewEncoderRejectsNilWriter(t *testing.T) {
 func TestNewEncoderRejectsInvalidConfig(t *testing.T) {
 	if _, err := pcm.NewEncoder(&bytes.Buffer{}, pcm.Config{}); err == nil {
 		t.Fatal("expected error for zero config")
-	}
-}
-
-func TestNewEncoderValidConfigNotImplemented(t *testing.T) {
-	_, err := pcm.NewEncoder(&bytes.Buffer{}, validConfig())
-	if !errors.Is(err, flac.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got %v", err)
 	}
 }
 

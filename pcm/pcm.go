@@ -6,7 +6,14 @@ type Config struct {
 	BitDepth   int // bits per sample, e.g. 16 or 24
 	Channels   int // number of channels, 1..8
 
-	// CompressionLevel selects encoder effort from 0 (fastest) to 8
-	// (smallest), matching libFLAC's level meaning.
+	// CompressionLevel selects encoder effort from 0 (fastest) to 8 (smallest),
+	// matching libFLAC's level meaning. The zero value is level 0. In this release
+	// the encoder is fixed-predictor only: levels 0-2 are fully realized (0 codes
+	// channels independently, 1 uses adaptive mid-side, 2 searches all stereo
+	// modes). Levels 3-8 add deeper residual-partition search and, from level 4,
+	// exhaustive fixed-order selection, so they compress somewhat better than level
+	// 2; the larger gain from LPC is deferred to a later release, at which point
+	// levels 3-8 improve automatically with no API change. Out-of-range values are
+	// clamped to 0-8.
 	CompressionLevel int
 }

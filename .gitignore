@@ -21,3 +21,6 @@ coverage.txt
 .idea/
 .vscode/
 .serena/
+
+# local tool cache (sentrux/opencode/etc.)
+cache/
