@@ -21,7 +21,8 @@ type Decoder struct {
 	seekable bool
 
 	frame   frame.Frame
-	pending []byte // packed PCM not yet returned by Read
+	buf     []byte // packed PCM backing buffer, reused across frames
+	pending []byte // unread window into buf, not yet returned by Read
 	bytesPS int    // bytes per sample = ceil(bps/8)
 	md5     hash.Hash
 	done    bool
@@ -68,8 +69,11 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	return 0, flac.ErrNotImplemented
 }
 
-// decodeNextFrame decodes one frame, packs its PCM into d.pending, and feeds MD5.
-// It returns io.EOF when the stream ends cleanly.
+// decodeNextFrame decodes one frame, packs its PCM into d.buf, and feeds MD5.
+// d.pending is a window into d.buf that Read/WriteTo drain. Packing into d.buf
+// (reset to d.buf[:0]) keeps the backing array stable across frames, so append
+// reuses capacity instead of reallocating once it is warmed up. It returns io.EOF
+// when the stream ends cleanly.
 func (d *Decoder) decodeNextFrame() error {
 	if d.done {
 		return io.EOF
@@ -82,8 +86,9 @@ func (d *Decoder) decodeNextFrame() error {
 		d.err = err
 		return err
 	}
-	d.pending = appendPacked(d.pending[:0], &d.frame, d.bytesPS)
-	d.md5.Write(d.pending)
+	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
+	d.md5.Write(d.buf)
+	d.pending = d.buf
 	return nil
 }
 
