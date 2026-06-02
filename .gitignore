@@ -1,0 +1,23 @@
+# Build artifacts
+/bin/
+*.exe
+*.test
+*.out
+
+# Coverage and profiling
+coverage.out
+coverage.txt
+*.cov
+*.prof
+*.pprof
+
+# Planning artifacts must never reach the public repo (canonical copies live
+# in the internal Forgejo tphakala/flac repo under docs/).
+/docs/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+.serena/
