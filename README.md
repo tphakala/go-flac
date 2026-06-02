@@ -1,8 +1,18 @@
 # go-flac
 
+[![CI](https://github.com/tphakala/go-flac/actions/workflows/ci.yml/badge.svg)](https://github.com/tphakala/go-flac/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/go-flac.svg)](https://pkg.go.dev/github.com/tphakala/go-flac)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Native, pure-Go FLAC encoder and decoder. No CGO, no external binaries. SIMD
 accelerated via [github.com/tphakala/simd](https://github.com/tphakala/simd)
 behind a pure-Go fallback, with a simple high-level PCM streaming API.
+
+## Install
+
+```bash
+go get github.com/tphakala/go-flac
+```
 
 ## Status
 
@@ -27,7 +37,49 @@ Forward-only decoding lands in M2; `SeekToSample` returns `ErrSeekUnsupported`
 for non-seekable sources, and mid-stream resync (streams that do not start at the
 `fLaC` marker) is deferred to M4.
 
-## API
+## Usage
+
+Decode a FLAC file to raw interleaved little-endian PCM:
+
+```go
+package main
+
+import (
+	"io"
+	"log"
+	"os"
+
+	"github.com/tphakala/go-flac/pcm"
+)
+
+func main() {
+	f, err := os.Open("input.flac")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	dec, err := pcm.NewDecoder(f)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	info := dec.Info()
+	log.Printf("%d Hz, %d channel(s), %d-bit", info.SampleRate, info.Channels, info.BitDepth)
+
+	// dec is an io.Reader and io.WriterTo of interleaved little-endian PCM.
+	out, err := os.Create("output.pcm")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, dec); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+API notes:
 
 ```go
 import "github.com/tphakala/go-flac/pcm"
