@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+echo "Running pre-push checks (race tests)..."
+go test -race ./...
+echo "All pre-push checks passed!"
