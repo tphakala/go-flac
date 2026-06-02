@@ -32,6 +32,12 @@ func readStreamInfo(br *bitio.Reader) (flac.StreamInfo, error) {
 	if err != nil {
 		return flac.StreamInfo{}, err
 	}
+	// A zero sample rate is invalid, and FLAC bit depth is 4..32 (the 5-bit field
+	// stores bps-1, so values 0..2 are below the minimum). Reject malformed
+	// STREAMINFO rather than letting bad values reach callers.
+	if rate == 0 || bps < 3 {
+		return flac.StreamInfo{}, flac.ErrUnsupported
+	}
 	si.SampleRate = int(rate)
 	si.Channels = int(ch) + 1
 	si.BitDepth = int(bps) + 1

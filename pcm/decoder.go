@@ -111,6 +111,11 @@ func (d *Decoder) finish() error {
 
 // Read fills p with interleaved little-endian PCM.
 func (d *Decoder) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		// Per io.Reader, a zero-length read returns immediately; do not decode
+		// a frame just to copy nothing.
+		return 0, nil
+	}
 	if d.err != nil {
 		return 0, d.err
 	}
