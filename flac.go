@@ -6,9 +6,23 @@ import "errors"
 // versioning; "0.0.0-dev" marks the pre-release groundwork skeleton.
 const Version = "0.0.0-dev"
 
-// ErrNotImplemented is returned by API surfaces that exist as scaffolding but
-// whose behavior is not yet built. Each milestone removes the uses it lands.
-var ErrNotImplemented = errors.New("go-flac: not implemented")
+// Sentinel errors returned by the decoder and the pcm streaming layer.
+// Callers can test for them with errors.Is.
+var (
+	// ErrNotImplemented marks API surfaces whose behavior is not yet built.
+	ErrNotImplemented = errors.New("go-flac: not implemented")
+	// ErrSeekUnsupported is returned by SeekToSample when the source is not seekable.
+	ErrSeekUnsupported = errors.New("go-flac: seek unsupported (source is not an io.Seeker)")
+	// ErrMissingStreamInfo means the stream had no STREAMINFO metadata block, or it did
+	// not appear first.
+	ErrMissingStreamInfo = errors.New("go-flac: missing or misplaced STREAMINFO block")
+	// ErrCRCMismatch means a frame header CRC-8 or frame CRC-16 did not match.
+	ErrCRCMismatch = errors.New("go-flac: CRC mismatch")
+	// ErrMD5Mismatch means the decoded-audio MD5 did not match the STREAMINFO MD5.
+	ErrMD5Mismatch = errors.New("go-flac: MD5 mismatch")
+	// ErrUnsupported marks a reserved or illegal coded value, or an unsupported layout.
+	ErrUnsupported = errors.New("go-flac: unsupported or reserved bitstream value")
+)
 
 // StreamInfo describes a FLAC stream's global properties, mirroring the
 // STREAMINFO metadata block.

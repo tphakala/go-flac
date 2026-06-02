@@ -35,6 +35,11 @@ tasks:
     cmds:
       - go test -bench=. -benchmem -benchtime={{.BENCH_TIME}} ./...
 
+  validate:
+    desc: Cross-validate the decoder against libFLAC (requires the flac binary and the testdata/flac-test-files submodule; the test skips if either is absent)
+    cmds:
+      - go test ./pcm/ -run TestCrossValidateLibFLAC -v
+
   vet:
     desc: Run go vet for amd64 and arm64
     cmds:
