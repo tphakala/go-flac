@@ -102,3 +102,15 @@ func TestSeekToSampleUnsupported(t *testing.T) {
 		t.Fatalf("non-seekable source: want ErrSeekUnsupported, got %v", err)
 	}
 }
+
+func TestSeekToSampleSeekableNotImplemented(t *testing.T) {
+	// A *bytes.Reader is an io.Seeker, so M2 reports the not-implemented sentinel
+	// (real seeking lands in M4) rather than ErrSeekUnsupported.
+	d, err := NewDecoder(bytes.NewReader(minimalStream(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SeekToSample(0); !errors.Is(err, flac.ErrNotImplemented) {
+		t.Fatalf("seekable source: want ErrNotImplemented, got %v", err)
+	}
+}

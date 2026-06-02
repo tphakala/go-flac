@@ -60,7 +60,8 @@ func (d *Decoder) Info() flac.StreamInfo { return d.info }
 // SeekToSample moves the read position to the given inter-channel sample index.
 // Implemented in M4; until then it reports ErrSeekUnsupported for non-seekable
 // sources and a not-implemented error for seekable ones.
-func (d *Decoder) SeekToSample(int64) (int64, error) {
+func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
+	_ = sampleIndex // used once seeking lands in M4
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
 	}

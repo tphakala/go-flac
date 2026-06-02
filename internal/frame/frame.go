@@ -41,13 +41,17 @@ func (h *header) channels() int {
 // to hold the frame's channels at its block size.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) error {
 	var c16 uint16
-	br.SetTap(func(b byte) { c16 = crc.Update16(c16, b) })
 	defer br.SetTap(nil)
 
+	// readHeaderKeepingTap installs a combined CRC-8 (header) + CRC-16 (frame)
+	// tap and verifies the header CRC-8 internally.
 	var hdr header
 	if err := readHeaderKeepingTap(br, si, &hdr, &c16); err != nil {
 		return err
 	}
+	// The header CRC-8 is finalized; the frame body only feeds the CRC-16, so
+	// drop the now-unused CRC-8 update from the tap for the rest of the frame.
+	br.SetTap(func(b byte) { c16 = crc.Update16(c16, b) })
 
 	nch := hdr.channels()
 	ensureChannels(dst, nch, hdr.blockSize)

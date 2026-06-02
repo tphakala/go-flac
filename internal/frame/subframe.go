@@ -34,6 +34,9 @@ func decodeSubframeT[T rice.Sample](br *bitio.Reader, dst []T, bps int) error {
 		return err
 	}
 	effBps := bps - wasted
+	if effBps <= 0 {
+		return fmt.Errorf("subframe: wasted bits %d leave no sample bits (bps %d): %w", wasted, bps, flac.ErrUnsupported)
+	}
 
 	switch {
 	case stype == 0: // CONSTANT
@@ -89,6 +92,12 @@ func readWastedBits(br *bitio.Reader) (int, error) {
 	q, err := br.ReadUnary() // k-1 zeros then a 1
 	if err != nil {
 		return 0, err
+	}
+	// Wasted bits must be fewer than the sample bit depth (at most 32). A unary
+	// run this long is malformed; reject it before int(q) can overflow or drive
+	// a huge ReadSigned loop on a negative effective bit depth.
+	if q >= 32 {
+		return 0, fmt.Errorf("subframe: wasted bit count %d too large: %w", q+1, flac.ErrUnsupported)
 	}
 	return int(q) + 1, nil
 }
