@@ -36,9 +36,14 @@ func ReadMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
 		if btype == typeInvalid {
 			return flac.StreamInfo{}, fmt.Errorf("meta: invalid block type 127: %w", flac.ErrUnsupported)
 		}
+		// STREAMINFO must be the first metadata block; fail fast if it is not.
+		if first && btype != typeStreamInfo {
+			return flac.StreamInfo{}, flac.ErrMissingStreamInfo
+		}
 		switch btype {
 		case typeStreamInfo:
 			if !first {
+				// A second STREAMINFO block is malformed.
 				return flac.StreamInfo{}, flac.ErrMissingStreamInfo
 			}
 			if length != 34 {

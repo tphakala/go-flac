@@ -2,6 +2,7 @@ package bitio
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"math/bits"
 )
@@ -54,9 +55,15 @@ func (r *Reader) loadByte() error {
 // ReadBits reads n bits (0..64) MSB-first and returns them right-aligned.
 func (r *Reader) ReadBits(n uint) (uint64, error) {
 	var out uint64
+	origN := n
 	for n > 0 {
 		if r.nbit == 0 {
 			if err := r.loadByte(); err != nil {
+				// EOF after some bits were already consumed is a truncated read,
+				// not a clean end of stream.
+				if errors.Is(err, io.EOF) && n < origN {
+					return 0, io.ErrUnexpectedEOF
+				}
 				return 0, err
 			}
 		}

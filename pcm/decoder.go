@@ -170,12 +170,54 @@ func appendPacked(dst []byte, fr *frame.Frame, bytesPS int) []byte {
 		dst = dst[:newLen]
 	}
 	idx := oldLen
-	for i := range fr.BlockSize {
-		for ch := range nch {
-			v := uint32(fr.Channels[ch][i])
-			for b := range bytesPS {
-				dst[idx] = byte(v >> (uint(b) * 8))
+	// Specialize on the byte width (1..4 for all FLAC bit depths) so the inner
+	// loop and variable shift drop out of the per-sample hot path.
+	switch bytesPS {
+	case 1:
+		for i := range fr.BlockSize {
+			for ch := range nch {
+				dst[idx] = byte(fr.Channels[ch][i])
 				idx++
+			}
+		}
+	case 2:
+		for i := range fr.BlockSize {
+			for ch := range nch {
+				v := uint16(fr.Channels[ch][i])
+				dst[idx] = byte(v)
+				dst[idx+1] = byte(v >> 8)
+				idx += 2
+			}
+		}
+	case 3:
+		for i := range fr.BlockSize {
+			for ch := range nch {
+				v := uint32(fr.Channels[ch][i])
+				dst[idx] = byte(v)
+				dst[idx+1] = byte(v >> 8)
+				dst[idx+2] = byte(v >> 16)
+				idx += 3
+			}
+		}
+	case 4:
+		for i := range fr.BlockSize {
+			for ch := range nch {
+				v := uint32(fr.Channels[ch][i])
+				dst[idx] = byte(v)
+				dst[idx+1] = byte(v >> 8)
+				dst[idx+2] = byte(v >> 16)
+				dst[idx+3] = byte(v >> 24)
+				idx += 4
+			}
+		}
+	default:
+		for i := range fr.BlockSize {
+			for ch := range nch {
+				v := uint32(fr.Channels[ch][i])
+				for b := range bytesPS {
+					dst[idx] = byte(v >> (uint(b) * 8))
+					idx++
+				}
 			}
 		}
 	}
