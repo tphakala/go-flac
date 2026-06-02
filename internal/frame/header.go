@@ -142,7 +142,9 @@ func decodeBlockSize(br *bitio.Reader, code uint64, hdr *header) error {
 	return nil
 }
 
-var sampleRateTable = map[uint64]int{
+// sampleRateTable maps sample-rate codes 1..11 to Hz. Codes 0 and 12..15 are
+// handled separately, so index 0 is unused. An array avoids per-frame map lookups.
+var sampleRateTable = [...]int{
 	1: 88200, 2: 176400, 3: 192000, 4: 8000, 5: 16000, 6: 22050,
 	7: 24000, 8: 32000, 9: 44100, 10: 48000, 11: 96000,
 }

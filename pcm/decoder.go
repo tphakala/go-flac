@@ -155,14 +155,27 @@ func (d *Decoder) WriteTo(w io.Writer) (int64, error) {
 	}
 }
 
-// appendPacked appends the frame's interleaved little-endian PCM to dst.
+// appendPacked appends the frame's interleaved little-endian PCM to dst. It grows
+// dst once to the exact size and writes by index, so a warmed-up reused buffer
+// packs each frame with no further allocation or per-byte append overhead.
 func appendPacked(dst []byte, fr *frame.Frame, bytesPS int) []byte {
 	nch := len(fr.Channels)
+	oldLen := len(dst)
+	newLen := oldLen + fr.BlockSize*nch*bytesPS
+	if cap(dst) < newLen {
+		grown := make([]byte, newLen)
+		copy(grown, dst)
+		dst = grown
+	} else {
+		dst = dst[:newLen]
+	}
+	idx := oldLen
 	for i := range fr.BlockSize {
 		for ch := range nch {
 			v := uint32(fr.Channels[ch][i])
 			for b := range bytesPS {
-				dst = append(dst, byte(v>>(uint(b)*8)))
+				dst[idx] = byte(v >> (uint(b) * 8))
+				idx++
 			}
 		}
 	}

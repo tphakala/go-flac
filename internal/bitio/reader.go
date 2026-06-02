@@ -66,7 +66,7 @@ func (r *Reader) ReadBits(n uint) (uint64, error) {
 		}
 		// Top `take` bits of the `nbit` valid low bits of cur.
 		shift := r.nbit - take
-		mask := byte((1 << take) - 1)
+		mask := byte(0xff >> (8 - take))
 		chunk := (r.cur >> shift) & mask
 		out = (out << take) | uint64(chunk)
 		r.nbit -= take
@@ -104,7 +104,7 @@ func (r *Reader) ReadUnary() (uint64, error) {
 			}
 		}
 		// Consider only the valid low nbit bits of cur.
-		mask := byte((1 << r.nbit) - 1)
+		mask := byte(0xff >> (8 - r.nbit))
 		val := r.cur & mask
 		if val == 0 {
 			// All remaining valid bits are zero; consume them and load more.
