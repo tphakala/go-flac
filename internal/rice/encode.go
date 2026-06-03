@@ -77,6 +77,11 @@ func bestParam(zz []uint64) (k int, bitCount int64) {
 	if hi > maxParam5 {
 		hi = maxParam5
 	}
+	// When est > maxParam5+1, lo was set to est-1 > hi. Clamp lo down so the
+	// loop always evaluates at least k=maxParam5 (the best feasible parameter).
+	if lo > hi {
+		lo = hi
+	}
 	best, bestBits := 0, int64(^uint64(0)>>1)
 	for kk := lo; kk <= hi; kk++ {
 		b := riceBits(zz, kk)

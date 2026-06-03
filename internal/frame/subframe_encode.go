@@ -194,6 +194,79 @@ func chooseLPCPlan(shifted []int32, eff int, p Params, window []float64) (order 
 	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder), true
 }
 
+// wastedBits64 returns the number of low-order zero bits common to every sample.
+// Returns 0 when all samples are zero (that case is encoded as a constant subframe).
+func wastedBits64(s []int64) int {
+	var orAll int64
+	for _, v := range s {
+		orAll |= v
+	}
+	if orAll == 0 {
+		return 0
+	}
+	return bits.TrailingZeros64(uint64(orAll))
+}
+
+// allEqual64 reports whether every element of s is the same value.
+func allEqual64(s []int64) bool {
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// shiftRight64 returns a new slice with every element of s shifted right by
+// wasted bits. Returns s directly when wasted is zero.
+func shiftRight64(s []int64, wasted int) []int64 {
+	if wasted == 0 {
+		return s
+	}
+	out := make([]int64, len(s))
+	for i, v := range s {
+		out[i] = v >> uint(wasted)
+	}
+	return out
+}
+
+// chooseFixedOrder64 returns the fixed predictor order to use for shifted together
+// with the Rice cost (in bits) of that order's residuals. Mirrors chooseFixedOrder
+// but operates on int64 samples for wide bit-depth support.
+func chooseFixedOrder64(shifted []int64, p Params) (order, resBits int) {
+	if p.ExhaustiveFixed {
+		bestOrder, bestBits := 0, int(^uint(0)>>1)
+		maxOrder := min(4, len(shifted)-1)
+		res := make([]int64, len(shifted))
+		for o := 0; o <= maxOrder; o++ {
+			r := res[:len(shifted)-o]
+			lpc.ComputeFixedResiduals64(r, shifted, o)
+			b := rice.CostResidual64(r, len(shifted), o, p.MaxPartitionOrder)
+			if b < bestBits {
+				bestBits, bestOrder = b, o
+			}
+		}
+		return bestOrder, bestBits
+	}
+	order = lpc.BestFixedOrder64(shifted, 4)
+	res := make([]int64, len(shifted)-order)
+	lpc.ComputeFixedResiduals64(res, shifted, order)
+	return order, rice.CostResidual64(res, len(shifted), order, p.MaxPartitionOrder)
+}
+
+// chooseLPCPlan64 runs LPC analysis on the wasted-bits-shifted int64 samples and,
+// if applicable, returns the chosen order, its quantized coefficients and shift,
+// and the exact Rice residual cost. Mirrors chooseLPCPlan for wide bit-depth support.
+func chooseLPCPlan64(shifted []int64, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
+	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
+	if !aok {
+		return 0, nil, 0, 0, false
+	}
+	res := make([]int64, len(shifted)-o)
+	lpc.ComputeLPCResiduals64(res, shifted, qc, sh, o)
+	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder), true
+}
+
 // allEqual reports whether every element of s is the same value.
 func allEqual(s []int32) bool {
 	for i := 1; i < len(s); i++ {
