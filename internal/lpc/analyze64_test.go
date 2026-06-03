@@ -13,7 +13,9 @@ func TestAnalyzeLPCGenericParity(t *testing.T) {
 	s32 := make([]int32, n)
 	s64 := make([]int64, n)
 	for i := range n {
-		v := int32((i*2654435761)>>20) & 0x3FFFFF // ~22-bit, fits both
+		// uint32 arithmetic avoids overflowing a 32-bit int (the multiplier exceeds
+		// 2^31), so the test compiles and runs on 32-bit targets too.
+		v := int32((uint32(i)*2654435761)>>20) & 0x3FFFFF // ~22-bit, fits both
 		s32[i] = v
 		s64[i] = int64(v)
 	}

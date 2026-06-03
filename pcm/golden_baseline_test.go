@@ -15,7 +15,10 @@ func goldenCase(t *testing.T, sampleRate, channels, bitDepth, level int) []byte 
 	bytesPS := (bitDepth + 7) / 8
 	pcm := make([]byte, frames*channels*bytesPS)
 	for i := range pcm {
-		pcm[i] = byte((i*1103515245 + 12345) >> 7)
+		// uint32 arithmetic keeps the generator deterministic across word sizes, so
+		// the golden hashes hold on 32-bit (GOARCH 386/arm) as well as 64-bit. The
+		// extracted byte is unchanged on 64-bit (it reads bits below 2^32).
+		pcm[i] = byte((uint32(i)*1103515245 + 12345) >> 7)
 	}
 	var out bytes.Buffer
 	enc, err := NewEncoder(&out, Config{SampleRate: sampleRate, Channels: channels, BitDepth: bitDepth, CompressionLevel: level})
