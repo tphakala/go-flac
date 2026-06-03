@@ -42,9 +42,11 @@ to before the wide-depth work.
 - M3c Wide bit-depth: 25-32 bps support end to end via an int64 encode path and
   the completed int64 decoder dispatch, validated by round-trip and libFLAC
   cross-validation. (done)
-- M4a Streaming hardening (decode side): sample-accurate SeekToSample (requires an
-  io.Seeker), internal frame resync for seek landing, and truncated-stream detection
-  (ErrTruncatedStream). SEEKTABLE emission lands in M4b.
+- M4 Streaming hardening: sample-accurate SeekToSample (requires an io.Seeker),
+  internal frame resync for seek landing, truncated-stream detection
+  (ErrTruncatedStream), and opt-in SEEKTABLE emission (Config.SeekTableInterval,
+  requires an io.WriteSeeker). A present SEEKTABLE accelerates seeks; binary search
+  is the fallback.
 - M5 SIMD integration.
 - M6 completeness and v0.1.0.
 
