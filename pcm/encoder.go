@@ -205,8 +205,9 @@ func (e *Encoder) Close() error {
 }
 
 // paramsForLevel maps a compression level (clamped to 0..8) to frame parameters.
-// Levels 0..2 are fully realized in M3 (fixed-only); levels 3..8 carry the same
-// fixed-only-relevant knobs and light up further when LPC lands in M3b.
+// Levels 0..2 use fixed predictors only (MaxLPCOrder = 0). Levels 3..8 enable
+// LPC with increasing max order, matching libFLAC's -l values: l3=6, l4-6=8, l7-8=12.
+// Levels 7 and 8 share all parameters in M3b (subdivide_tukey is deferred to M4).
 func paramsForLevel(level int) frame.Params {
 	if level < 0 {
 		level = 0
@@ -218,18 +219,27 @@ func paramsForLevel(level int) frame.Params {
 		stereo  frame.StereoMode
 		maxPart int
 		exFixed bool
+		maxLPC  int
+		prec    int
 	}
 	table := [9]row{
-		0: {frame.StereoIndependent, 3, false},
-		1: {frame.StereoAdaptive, 3, false},
-		2: {frame.StereoFull, 3, false},
-		3: {frame.StereoFull, 4, false},
-		4: {frame.StereoFull, 4, true},
-		5: {frame.StereoFull, 5, true},
-		6: {frame.StereoFull, 6, true},
-		7: {frame.StereoFull, 6, true},
-		8: {frame.StereoFull, 6, true},
+		0: {frame.StereoIndependent, 3, false, 0, 0},
+		1: {frame.StereoAdaptive, 3, false, 0, 0},
+		2: {frame.StereoFull, 3, false, 0, 0},
+		3: {frame.StereoFull, 4, false, 6, 15},
+		4: {frame.StereoFull, 4, true, 8, 15},
+		5: {frame.StereoFull, 5, true, 8, 15},
+		6: {frame.StereoFull, 6, true, 8, 15},
+		7: {frame.StereoFull, 6, true, 12, 15},
+		8: {frame.StereoFull, 6, true, 12, 15},
 	}
 	r := table[level]
-	return frame.Params{Stereo: r.stereo, MaxPartitionOrder: r.maxPart, ExhaustiveFixed: r.exFixed}
+	return frame.Params{
+		Stereo:            r.stereo,
+		MaxPartitionOrder: r.maxPart,
+		ExhaustiveFixed:   r.exFixed,
+		MaxLPCOrder:       r.maxLPC,
+		LPCPrecision:      r.prec,
+		// Apodization left as the zero value (ApodTukey05).
+	}
 }
