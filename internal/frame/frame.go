@@ -139,6 +139,8 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 	if bps >= 25 {
 		if cap(dst.work64[0]) < bs {
 			dst.work64[0] = make([]int64, bs)
+		}
+		if cap(dst.work64[1]) < bs {
 			dst.work64[1] = make([]int64, bs)
 		}
 		a := dst.work64[0][:bs]
