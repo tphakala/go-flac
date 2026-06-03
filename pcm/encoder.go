@@ -15,6 +15,10 @@ import (
 
 const encoderBlockSize = 4096
 
+// defaultSeekMaxPoints sizes the reserved SEEKTABLE when SeekTableMaxPoints is 0.
+// 4096 points is 4096*18 = 72 KiB, ample for typical files at one point per second.
+const defaultSeekMaxPoints = 4096
+
 // Encoder encodes interleaved little-endian PCM written to it into a FLAC stream.
 // It implements io.WriteCloser; Close flushes the final frame and finalizes the
 // STREAMINFO MD5, total samples, and min/max sizes (the last only when the sink is
@@ -40,6 +44,13 @@ type Encoder struct {
 	wrote              bool
 	minBlock, maxBlock int
 	minFrame, maxFrame int
+
+	seekInterval  int   // samples between seek points (0 disables)
+	seekMaxPoints int   // reserved placeholder point count
+	seekBodyOff   int64 // absolute byte offset of the SEEKTABLE body
+	audioBytes    int64 // audio bytes written so far (= next frame's byte offset)
+	points        []meta.SeekPoint
+	nextBoundary  int64 // next sample boundary at which to record a point
 
 	closed bool
 }
@@ -80,9 +91,37 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		e.ws = ws
 	}
 
-	body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders
-	if err := meta.WriteStreamHeader(w, body); err != nil {
-		return nil, err
+	if cfg.SeekTableInterval > 0 {
+		if e.ws == nil {
+			return nil, errors.New("go-flac/pcm: NewEncoder: SeekTableInterval requires an io.WriteSeeker sink")
+		}
+		e.seekInterval = cfg.SeekTableInterval
+		e.seekMaxPoints = cfg.SeekTableMaxPoints
+		if e.seekMaxPoints <= 0 {
+			e.seekMaxPoints = defaultSeekMaxPoints
+		}
+		e.nextBoundary = int64(e.seekInterval)
+		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
+		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
+			return nil, err
+		}
+		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
+		if _, err := w.Write(meta.EncodeBlockHeader(false, 3 /*SEEKTABLE*/, len(stBody))); err != nil {
+			return nil, err
+		}
+		// SEEKTABLE body offset = "fLaC"(4) + STREAMINFO header(4) + body(34) + SEEKTABLE header(4).
+		e.seekBodyOff = int64(4 + 4 + meta.StreamInfoBodyLen + 4)
+		if _, err := w.Write(stBody); err != nil {
+			return nil, err
+		}
+		if _, err := w.Write(meta.EncodeBlockHeader(true, 1 /*PADDING*/, 0)); err != nil { // last=1
+			return nil, err
+		}
+	} else {
+		body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders, last=1
+		if err := meta.WriteStreamHeader(w, body); err != nil {
+			return nil, err
+		}
 	}
 	return e, nil
 }
