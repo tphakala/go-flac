@@ -56,14 +56,16 @@ func writeVerbatim(bw *bitio.Writer, s []int32, wasted, bps int) {
 
 // subframePlan records the chosen encoding of one subframe signal.
 type subframePlan struct {
-	kind   int // 0 constant, 1 verbatim, 2 fixed
-	order  int // fixed predictor order (kind == 2)
+	kind   int // 0 constant, 1 verbatim, 2 fixed, 3 LPC
+	order  int // fixed predictor order (kind 2) or LPC order (kind 3)
 	wasted int
-	bits   int // estimated total subframe bits, for decorrelation selection
+	bits   int     // estimated total subframe bits, for decorrelation selection
+	qcoeff []int32 // LPC quantized coefficients (kind 3)
+	shift  int     // LPC quantization shift (kind 3)
 }
 
 // planSubframe chooses the cheapest subframe encoding for s at the given bps.
-func planSubframe(s []int32, bps int, p Params) subframePlan {
+func planSubframe(s []int32, bps int, p Params, window []float64) subframePlan {
 	if allEqual(s) {
 		return subframePlan{kind: 0, bits: 1 + 6 + 1 + bps}
 	}
@@ -81,13 +83,27 @@ func planSubframe(s []int32, bps int, p Params) subframePlan {
 		hdrBits += wasted // unary (wasted-1 zeros + 1)
 	}
 	shifted := shiftRight(s, wasted)
-	order, resBits := chooseFixedOrder(shifted, p)
-	fixedBits := hdrBits + order*eff + resBits
+
+	fOrder, fResBits := chooseFixedOrder(shifted, p)
+	fixedBits := hdrBits + fOrder*eff + fResBits
 	verbatimBits := hdrBits + len(s)*eff
-	if verbatimBits <= fixedBits {
-		return subframePlan{kind: 1, wasted: wasted, bits: verbatimBits}
+
+	// Start from verbatim; fixed and LPC must strictly beat the running best so
+	// that verbatim wins ties against fixed (preserving the prior behavior).
+	best := subframePlan{kind: 1, wasted: wasted, bits: verbatimBits}
+	if fixedBits < best.bits {
+		best = subframePlan{kind: 2, order: fOrder, wasted: wasted, bits: fixedBits}
 	}
-	return subframePlan{kind: 2, order: order, wasted: wasted, bits: fixedBits}
+
+	if p.MaxLPCOrder > 0 && window != nil {
+		if lOrder, qc, shift, lResBits, ok := chooseLPCPlan(shifted, eff, p, window); ok {
+			lpcBits := hdrBits + lOrder*eff + 4 + 5 + lOrder*p.LPCPrecision + lResBits
+			if lpcBits < best.bits {
+				best = subframePlan{kind: 3, order: lOrder, wasted: wasted, bits: lpcBits, qcoeff: qc, shift: shift}
+			}
+		}
+	}
+	return best
 }
 
 // writeSubframe writes s according to plan.
@@ -137,6 +153,21 @@ func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
 	res := make([]int32, len(shifted)-order)
 	lpc.ComputeFixedResiduals(res, shifted, order)
 	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder)
+}
+
+// chooseLPCPlan runs LPC analysis on the wasted-bits-shifted samples and, if
+// applicable, returns the chosen order, its quantized coefficients and shift,
+// and the exact Rice residual cost (the residual cost only; the warmup, coeff,
+// precision and shift field bits are added by the caller). ok is false when LPC
+// is not applicable for this subframe.
+func chooseLPCPlan(shifted []int32, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
+	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
+	if !aok {
+		return 0, nil, 0, 0, false
+	}
+	res := make([]int32, len(shifted)-o)
+	lpc.ComputeLPCResiduals(res, shifted, qc, sh, o)
+	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder), true
 }
 
 // allEqual reports whether every element of s is the same value.
