@@ -113,9 +113,33 @@ func writeSubframe(bw *bitio.Writer, s []int32, bps int, plan subframePlan, p Pa
 		writeConstant(bw, s[0], 0, bps)
 	case 1:
 		writeVerbatim(bw, s, plan.wasted, bps)
+	case 3:
+		writeLPC(bw, s, plan.order, plan.qcoeff, plan.shift, plan.wasted, bps, p.LPCPrecision, p.MaxPartitionOrder)
 	default:
 		writeFixed(bw, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
 	}
+}
+
+// writeLPC writes a SUBFRAME_LPC: header (type code 31+order), warmup samples,
+// 4-bit precision-1, 5-bit shift, the quantized coefficients, then the Rice
+// residual. precision is the coefficient bit width (p.LPCPrecision). It mirrors
+// writeFixed and recomputes residuals with ComputeLPCResiduals (the integer
+// inverse of RestoreLPC), so the decoder reconstructs the samples exactly.
+func writeLPC(bw *bitio.Writer, s []int32, order int, qcoeff []int32, shift, wasted, bps, precision, maxPartOrder int) {
+	writeSubframeHeader(bw, 31+order, wasted)
+	eff := uint(bps - wasted)
+	shifted := shiftRight(s, wasted)
+	for i := range order {
+		bw.WriteSignedBits(int64(shifted[i]), eff)
+	}
+	bw.WriteBits(uint64(precision-1), 4)
+	bw.WriteSignedBits(int64(shift), 5)
+	for i := range order {
+		bw.WriteSignedBits(int64(qcoeff[i]), uint(precision))
+	}
+	res := make([]int32, len(shifted)-order)
+	lpc.ComputeLPCResiduals(res, shifted, qcoeff, shift, order)
+	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder)
 }
 
 // writeFixed writes a fixed-predictor subframe of the given order.

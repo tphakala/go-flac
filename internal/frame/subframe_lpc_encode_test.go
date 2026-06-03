@@ -1,9 +1,11 @@
 package frame
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
+	"github.com/tphakala/go-flac/internal/bitio"
 	"github.com/tphakala/go-flac/internal/lpc"
 )
 
@@ -53,5 +55,44 @@ func TestPlanSubframeNoLPCWhenDisabled(t *testing.T) {
 	plan := planSubframe(s, 16, p, nil)
 	if plan.kind == 3 {
 		t.Fatal("plan.kind = 3 (LPC) but MaxLPCOrder is 0")
+	}
+}
+
+func TestWriteLPCRoundTrips(t *testing.T) {
+	s := arSignal16(4096)
+	bps := 16
+	p := Params{MaxPartitionOrder: 6, ExhaustiveFixed: true, MaxLPCOrder: 12, LPCPrecision: 15}
+	window := lpc.TukeyWindow(len(s), 0.5)
+
+	plan := planSubframe(s, bps, p, window)
+	if plan.kind != 3 {
+		t.Fatalf("precondition: expected LPC plan, got kind %d", plan.kind)
+	}
+
+	bw := bitio.NewWriter()
+	writeSubframe(bw, s, bps, plan, p)
+	bw.AlignByte()
+	data := bw.Bytes()
+
+	// The emitted subframe must genuinely be an LPC subframe (type code
+	// 31+order), not a fixed subframe. Without writeLPC, kind 3 falls through to
+	// writeFixed and emits type 8+order; this assertion fails for that wrong
+	// path. The type code lives in bits 1..6 of the first byte (bit 0 is the
+	// zero pad). This guards against an order that would otherwise round-trip
+	// correctly through the fixed decoder.
+	if got := int(data[0]>>1) & 0x3F; got != 31+plan.order {
+		t.Fatalf("subframe type code = %d, want %d (LPC order %d)", got, 31+plan.order, plan.order)
+	}
+
+	// Decode the subframe back through the real M2 decoder entry and compare.
+	br := bitio.NewReader(bytes.NewReader(data))
+	got := make([]int32, len(s))
+	if err := decodeSubframe(br, got, bps); err != nil {
+		t.Fatalf("decodeSubframe: %v", err)
+	}
+	for i := range s {
+		if got[i] != s[i] {
+			t.Fatalf("round-trip mismatch at %d: got %d want %d", i, got[i], s[i])
+		}
 	}
 }
