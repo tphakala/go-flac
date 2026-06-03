@@ -23,20 +23,25 @@ and `io.WriterTo`. It is validated bit-exactly against the IETF FLAC test corpus
 byte-for-byte against the reference libFLAC `flac -d`, and fuzzed for
 panic-freedom.
 
-`pcm.NewEncoder` (M3) encodes interleaved little-endian PCM to FLAC. It supports
-bit depths 4-24, constant/verbatim/fixed predictors, full four-way stereo
+`pcm.NewEncoder` encodes interleaved little-endian PCM to FLAC. It supports bit
+depths 4-32, constant/verbatim/fixed and LPC predictors, full four-way stereo
 decorrelation (independent, left-side, right-side, mid-side), and the 0-8
-compression-level API. Levels 3-8 already use deeper residual-partition search
-and exhaustive fixed-order selection, so they compress somewhat better than level
-2; the larger gain from LPC predictors is deferred to M3b, at which point those
-levels improve automatically with no API change.
+compression-level API. Levels 0-2 use fixed predictors; levels 3-8 add quantized
+LPC with deeper residual-partition search and exhaustive fixed-order selection.
+Depths up to 24 bps run an int32 path; depths 25-32 bps run a dedicated int64
+path (encoder and decoder), and the int32 output for <= 24 bps is byte-identical
+to before the wide-depth work.
 
 - M1 Groundwork: skeleton, tooling, CI. (done)
 - M2 Decoder: bitstream, metadata, frame decode, Rice + predictor restore,
   inter-channel decorrelation, public `pcm.Decoder`, MD5 + corpus validation. (done)
 - M3 Encoder: constant/verbatim/fixed predictors, four-way stereo decorrelation,
   0-8 compression-level API, bit-exact round-trip, libFLAC cross-validation. (done)
-- M3b LPC: linear-predictive coding, bringing levels 3-8 to their full potential.
+- M3b LPC: quantized linear-predictive coding, bringing levels 3-8 to their full
+  potential. (done)
+- M3c Wide bit-depth: 25-32 bps support end to end via an int64 encode path and
+  the completed int64 decoder dispatch, validated by round-trip and libFLAC
+  cross-validation. (done)
 - M4 Streaming hardening: sample-accurate seek, resync, zero-copy drain.
 - M5 SIMD integration.
 - M6 completeness and v0.1.0.
@@ -147,7 +152,7 @@ dec, err := pcm.NewDecoder(r)
 // SeekToSample returns ErrSeekUnsupported for non-seekable sources and
 // ErrNotImplemented otherwise.
 
-// Encoder: implemented (M3).
+// Encoder: implemented.
 enc, err := pcm.NewEncoder(w, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2})
 // enc implements io.WriteCloser; write interleaved little-endian PCM and call
 // Close to flush the final frame and finalize STREAMINFO. Pass an io.WriteSeeker
