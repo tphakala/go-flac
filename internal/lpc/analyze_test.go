@@ -60,3 +60,39 @@ func TestAutocorrelate(t *testing.T) {
 		}
 	}
 }
+
+func TestLevinsonAR1(t *testing.T) {
+	// Autocorrelation of an AR(1) process with a=0.5: R[k] = R[0]*0.5^|k|.
+	autoc := []float64{1, 0.5, 0.25}
+	lpcByOrder, errByOrder, maxComputed := levinson(autoc, 2)
+	if maxComputed != 2 {
+		t.Fatalf("maxComputed = %d, want 2", maxComputed)
+	}
+	// Order 1 predictor coefficient should be ~0.5 (recovers a).
+	if got := lpcByOrder[1]; len(got) != 1 || math.Abs(got[0]-0.5) > 1e-9 {
+		t.Fatalf("order-1 coeffs = %v, want [0.5]", got)
+	}
+	// Order 2 coefficients should be ~[0.5, 0] (AR(1) has no 2nd term).
+	if got := lpcByOrder[2]; len(got) != 2 ||
+		math.Abs(got[0]-0.5) > 1e-9 || math.Abs(got[1]-0) > 1e-9 {
+		t.Fatalf("order-2 coeffs = %v, want [0.5, 0]", got)
+	}
+	// Prediction error must be non-increasing in order.
+	if !(errByOrder[1] <= errByOrder[0]+1e-12 && errByOrder[2] <= errByOrder[1]+1e-12) {
+		t.Fatalf("errors not non-increasing: %v", errByOrder)
+	}
+	// err[1] = err[0]*(1 - 0.5^2) = 1*0.75.
+	if math.Abs(errByOrder[1]-0.75) > 1e-9 {
+		t.Fatalf("err[1] = %v, want 0.75", errByOrder[1])
+	}
+}
+
+func TestLevinsonStopsOnNonPositiveError(t *testing.T) {
+	// Degenerate autocorrelation; recursion must not panic and must report a
+	// maxComputed it can stand behind.
+	autoc := []float64{0, 0, 0}
+	_, _, maxComputed := levinson(autoc, 2)
+	if maxComputed < 0 || maxComputed > 2 {
+		t.Fatalf("maxComputed = %d out of range", maxComputed)
+	}
+}

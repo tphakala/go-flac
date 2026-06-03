@@ -65,3 +65,51 @@ func autocorrelate(x []float64, maxLag int) []float64 {
 	}
 	return autoc
 }
+
+// levinson runs the Levinson-Durbin recursion on the autocorrelation (which
+// must have length >= maxOrder+1) and returns, for each order o in 1..maxOrder,
+// the o predictor coefficients in lpcByOrder[o] and the prediction error in
+// errByOrder[o] (errByOrder[0] = autoc[0]). The stored coefficients are sign-
+// adjusted so that pred = sum_j lpcByOrder[o][j] * x[n-1-j] matches the decoder.
+// maxComputed is the highest order actually produced; it is < maxOrder if the
+// recursion hit a non-positive error and stopped early. lpcByOrder[o] is nil
+// for orders beyond maxComputed.
+func levinson(autoc []float64, maxOrder int) (lpcByOrder [][]float64, errByOrder []float64, maxComputed int) {
+	lpcByOrder = make([][]float64, maxOrder+1)
+	errByOrder = make([]float64, maxOrder+1)
+	errByOrder[0] = autoc[0]
+
+	lpc := make([]float64, maxOrder)
+	err := autoc[0]
+	for i := range maxOrder {
+		if err <= 0 {
+			return lpcByOrder, errByOrder, i
+		}
+		// Reflection coefficient.
+		r := -autoc[i+1]
+		for j := range i {
+			r -= lpc[j] * autoc[i-j]
+		}
+		r /= err
+
+		lpc[i] = r
+		for j := range i / 2 {
+			tmp := lpc[j]
+			lpc[j] += r * lpc[i-1-j]
+			lpc[i-1-j] += r * tmp
+		}
+		if i%2 == 1 {
+			lpc[i/2] += lpc[i/2] * r
+		}
+		err *= 1 - r*r
+
+		order := i + 1
+		c := make([]float64, order)
+		for j := range order {
+			c[j] = -lpc[j] // predictor coefficients (decoder sign convention)
+		}
+		lpcByOrder[order] = c
+		errByOrder[order] = err
+	}
+	return lpcByOrder, errByOrder, maxOrder
+}
