@@ -155,3 +155,37 @@ func TestQuantizeCoefficientsRejectsZero(t *testing.T) {
 		t.Fatal("ok=true for all-zero coeffs, want false")
 	}
 }
+
+func TestEstimateBestOrder(t *testing.T) {
+	// Error drops sharply through order 2, then flattens. With a per-order
+	// header cost, the estimate should settle around order 2-3, never above
+	// maxComputed.
+	errByOrder := []float64{100, 50, 10, 9.9, 9.8}
+	const blockLen = 1000
+	const perOrderHeader = 16 + 15 // eff + precision
+	got := estimateBestOrder(errByOrder, 4, blockLen, perOrderHeader)
+	if got < 2 || got > 3 {
+		t.Fatalf("order = %d, want 2 or 3", got)
+	}
+	if got > 4 {
+		t.Fatalf("order %d exceeds maxComputed 4", got)
+	}
+}
+
+func TestEstimateBestOrderFlatPicksLow(t *testing.T) {
+	// No improvement past order 1: the header cost should keep the order at 1.
+	errByOrder := []float64{100, 100, 100, 100}
+	got := estimateBestOrder(errByOrder, 3, 1000, 31)
+	if got != 1 {
+		t.Fatalf("order = %d, want 1", got)
+	}
+}
+
+func TestEstimateBestOrderPerfectPrediction(t *testing.T) {
+	// A non-positive error means perfect prediction at that order.
+	errByOrder := []float64{100, 50, 0, 0}
+	got := estimateBestOrder(errByOrder, 3, 1000, 31)
+	if got != 2 {
+		t.Fatalf("order = %d, want 2 (first perfect order)", got)
+	}
+}

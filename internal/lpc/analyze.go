@@ -166,3 +166,30 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 	}
 	return qcoeff, shift, true
 }
+
+// estimateBestOrder picks the LPC order in 1..maxComputed that minimizes the
+// estimated total subframe bits: an estimated bits-per-residual-sample derived
+// from the prediction error, times the residual count, plus a per-order header
+// cost (warmup bits + coefficient bits). This mirrors libFLAC's default order
+// selection. Because every order round-trips, the choice only affects
+// compression, not correctness. A non-positive error at some order means
+// perfect prediction there, which is selected immediately.
+func estimateBestOrder(errByOrder []float64, maxComputed, blockLen, perOrderHeaderBits int) int {
+	bestOrder := 1
+	bestBits := math.Inf(1)
+	for o := 1; o <= maxComputed; o++ {
+		e := errByOrder[o]
+		if e <= 0 {
+			return o
+		}
+		bps := 0.5 * math.Log2(e)
+		if bps < 0 {
+			bps = 0
+		}
+		total := bps*float64(blockLen-o) + float64(o*perOrderHeaderBits)
+		if total < bestBits {
+			bestBits, bestOrder = total, o
+		}
+	}
+	return bestOrder
+}
