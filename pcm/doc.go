@@ -2,6 +2,6 @@
 //
 // It bridges raw interleaved little-endian PCM and the FLAC codec core,
 // exposing an io.WriteCloser encoder and an io.Reader / io.WriterTo decoder.
-// The decoder (NewDecoder) landed in M2 and the encoder (NewEncoder) in M3;
-// both are implemented. Sample-accurate Seek is deferred to a later milestone.
+// The decoder (NewDecoder) supports sample-accurate SeekToSample when the
+// underlying source implements io.Seeker.
 package pcm

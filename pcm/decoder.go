@@ -14,8 +14,8 @@ import (
 )
 
 // Decoder decodes a FLAC stream into interleaved little-endian PCM. It implements
-// io.Reader and io.WriterTo, and offers sample-accurate SeekToSample when the
-// underlying source is an io.Seeker (implemented in M4).
+// io.Reader and io.WriterTo, and offers sample-accurate SeekToSample; seeking
+// requires the underlying source to be an io.Seeker.
 type Decoder struct {
 	br       *bitio.Reader
 	rs       io.ReadSeeker // non-nil when the source is seekable

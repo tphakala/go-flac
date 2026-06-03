@@ -42,13 +42,16 @@ to before the wide-depth work.
 - M3c Wide bit-depth: 25-32 bps support end to end via an int64 encode path and
   the completed int64 decoder dispatch, validated by round-trip and libFLAC
   cross-validation. (done)
-- M4 Streaming hardening: sample-accurate seek, resync, zero-copy drain.
+- M4a Streaming hardening (decode side): sample-accurate SeekToSample (requires an
+  io.Seeker), internal frame resync for seek landing, and truncated-stream detection
+  (ErrTruncatedStream). SEEKTABLE emission lands in M4b.
 - M5 SIMD integration.
 - M6 completeness and v0.1.0.
 
-Forward-only decoding lands in M2; `SeekToSample` returns `ErrSeekUnsupported`
-for non-seekable sources, and mid-stream resync (streams that do not start at the
-`fLaC` marker) is deferred to M4.
+`SeekToSample` is sample-accurate and requires an io.Seeker; it returns
+`ErrSeekUnsupported` when the source is not seekable and `ErrInvalidSeek` on a
+negative sample index. Mid-stream resync from a non-fLaC start position remains
+future work.
 
 ## Usage
 
@@ -148,9 +151,9 @@ import "github.com/tphakala/go-flac/pcm"
 // Decoder: implemented.
 dec, err := pcm.NewDecoder(r)
 // dec implements io.Reader and io.WriterTo, yielding interleaved little-endian
-// PCM. dec.Info() returns the stream's STREAMINFO properties. Until M4,
-// SeekToSample returns ErrSeekUnsupported for non-seekable sources and
-// ErrNotImplemented otherwise.
+// PCM. dec.Info() returns the stream's STREAMINFO properties.
+// SeekToSample requires an io.Seeker: it returns ErrSeekUnsupported for
+// non-seekable sources and ErrInvalidSeek on a negative index.
 
 // Encoder: implemented.
 enc, err := pcm.NewEncoder(w, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2})
