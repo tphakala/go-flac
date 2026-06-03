@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
@@ -30,15 +31,23 @@ func goldenCase(t *testing.T, sampleRate, channels, bitDepth, level int) []byte 
 	return out.Bytes()
 }
 
-// TestGoldenBaselineCapture records the current int32 output checksums. Task 12 turns
-// these into assertions after the encoder refactor.
-func TestGoldenBaselineCapture(t *testing.T) {
+func TestInt32OutputUnchanged(t *testing.T) {
+	want := map[string]string{
+		"44100/1/16/5": "fac8ce89162247db6ff9ea876e79ff21615e0944dfadc1d195424071822d991d",
+		"44100/2/16/5": "f895dc6923243681cc0a7773e11b9731117a316204f6646480fb4f1c3886a9dd",
+		"48000/2/24/8": "497f00f0cf8f484008662efe8828a7e5d976a6998d4b99909aa6b7e141d24a1b",
+		"44100/2/16/0": "653959c8a80348a20fd18dd2bde25f23ee02bccc039ce1fb3ac053a03bb77164",
+		"96000/2/24/3": "ab69363491a90874336d46f0b6f378e206d8df4250636467a7e5775365cec98a",
+	}
 	cases := []struct{ sr, ch, bd, lvl int }{
 		{44100, 1, 16, 5}, {44100, 2, 16, 5}, {48000, 2, 24, 8},
 		{44100, 2, 16, 0}, {96000, 2, 24, 3},
 	}
 	for _, c := range cases {
+		key := fmt.Sprintf("%d/%d/%d/%d", c.sr, c.ch, c.bd, c.lvl)
 		got := sha256.Sum256(goldenCase(t, c.sr, c.ch, c.bd, c.lvl))
-		t.Logf("golden %d/%dch/%dbit/L%d = %s", c.sr, c.ch, c.bd, c.lvl, hex.EncodeToString(got[:]))
+		if hex.EncodeToString(got[:]) != want[key] {
+			t.Fatalf("int32 output for %s changed: got %s", key, hex.EncodeToString(got[:]))
+		}
 	}
 }
