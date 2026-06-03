@@ -47,6 +47,17 @@ jobs:
       - name: Run tests
         run: go test -race ./...
 
+      - name: Rice 32-bit overflow guard (Linux)
+        if: runner.os == 'Linux'
+        # The Rice cost accumulator must stay correct where int is 32 bits. Pure-Go
+        # 386 test binaries run on the amd64 runner via the kernel's IA32 emulation;
+        # CGO_ENABLED=0 keeps the build from needing a 32-bit libc. No -race: the
+        # race detector does not support 386.
+        env:
+          CGO_ENABLED: '0'
+          GOARCH: '386'
+        run: go test ./internal/rice/...
+
       - name: Fuzz seed corpora (Linux)
         if: runner.os == 'Linux'
         run: |

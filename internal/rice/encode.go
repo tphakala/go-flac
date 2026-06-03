@@ -43,15 +43,17 @@ func planPartition(zz []uint64) partPlan {
 	}
 	// Escape partition body: 5-bit width field + raw samples.
 	escBits := 5 + raw*len(zz)
-	if escBits < riceBitCount {
+	if int64(escBits) < riceBitCount {
 		return partPlan{escape: true, rawBits: raw, payload: escBits}
 	}
-	return partPlan{param: k, payload: riceBitCount}
+	// Safe narrowing: this branch runs only when riceBitCount <= escBits, and
+	// escBits = 5 + raw*len(zz) <= 5 + 32*4096 ~ 131k, well inside int.
+	return partPlan{param: k, payload: int(riceBitCount)}
 }
 
 // bestParam returns the Rice parameter k minimizing payload bits for zz, and that
 // bit count (unary quotients + remainders, not including the parameter field).
-func bestParam(zz []uint64) (k, bitCount int) {
+func bestParam(zz []uint64) (k int, bitCount int64) {
 	var sum uint64
 	for _, u := range zz {
 		sum += u
@@ -70,7 +72,7 @@ func bestParam(zz []uint64) (k, bitCount int) {
 	if hi > maxParam5 {
 		hi = maxParam5
 	}
-	best, bestBits := 0, int(^uint(0)>>1)
+	best, bestBits := 0, int64(^uint64(0)>>1)
 	for kk := lo; kk <= hi; kk++ {
 		b := riceBits(zz, kk)
 		if b < bestBits {
@@ -81,12 +83,22 @@ func bestParam(zz []uint64) (k, bitCount int) {
 }
 
 // riceBits counts the payload bits (unary + remainder) for zz with parameter k.
-func riceBits(zz []uint64, k int) int {
-	total := 0
+// The accumulator is int64 so a pathological partition (large residuals coded at a
+// small k) cannot overflow on a 32-bit build, where a wrapped count would make
+// bestParam choose a non-optimal parameter.
+func riceBits(zz []uint64, k int) int64 {
+	// k is a Rice parameter in [0, maxParam5]; the & 63 mask is a no-op on its
+	// value but proves the shift count is < 64 to the compiler, which then drops
+	// the oversized-shift guard (CMP/SBB/AND) from this per-residual hot loop.
+	shift := uint(k) & 63
+	// Each residual costs (u>>k) quotient bits + 1 stop bit + k remainder bits. The
+	// constant per-residual term (1 + k) is summed once at the end rather than every
+	// iteration, leaving just a shift-and-add in the hot loop.
+	var quotients int64
 	for _, u := range zz {
-		total += int(u>>uint(k)) + 1 + k
+		quotients += int64(u >> shift)
 	}
-	return total
+	return quotients + int64(len(zz))*(1+int64(k))
 }
 
 // EncodeResidual writes the partitioned Rice residual for res (the blockSize-

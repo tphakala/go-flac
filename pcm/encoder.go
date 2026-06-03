@@ -88,27 +88,51 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 }
 
 // Write consumes interleaved little-endian PCM samples. Bytes that do not yet form
-// a full 4096-sample block are buffered until the next Write or Close.
+// a full 4096-sample block are buffered until the next Write or Close. The join
+// buffer (e.carry) only ever assembles the single block straddling the leftover/p
+// boundary; all further whole blocks are read straight from p, so neither e.carry
+// nor e.leftover grows past single-block scale regardless of how large p is.
 func (e *Encoder) Write(p []byte) (int, error) {
 	if e.closed {
 		return 0, flac.ErrEncoderClosed
 	}
 	blockBytes := encoderBlockSize * e.frameLen
-	data := p
+	n := len(p) // captured before p is resliced below; Write must report this
+
+	// written counts bytes of p that landed in blocks already handed to the sink,
+	// so a mid-write emitBlock failure reports a contract-correct partial count
+	// (io.Writer requires the bytes consumed from p, not 0) instead of 0.
+	written := 0
+
+	// 1. Complete one block from leftover + the head of p, if we now have enough.
 	if len(e.leftover) > 0 {
+		need := blockBytes - len(e.leftover) // >= 1: leftover is always < blockBytes
+		if len(p) < need {                   // still short of a full block
+			e.leftover = append(e.leftover, p...)
+			return n, nil
+		}
 		e.carry = append(e.carry[:0], e.leftover...)
-		e.carry = append(e.carry, p...)
-		data = e.carry
+		e.carry = append(e.carry, p[:need]...) // e.carry is now exactly one block
+		if err := e.emitBlock(e.carry, encoderBlockSize); err != nil {
+			return 0, err // boundary block failed: no bytes of p durably consumed
+		}
+		e.leftover = e.leftover[:0]
+		p = p[need:]
+		written = need
 	}
+
+	// 2. Emit whole blocks straight from p (no copy).
 	off := 0
-	for len(data)-off >= blockBytes {
-		if err := e.emitBlock(data[off:off+blockBytes], encoderBlockSize); err != nil {
-			return 0, err
+	for len(p)-off >= blockBytes {
+		if err := e.emitBlock(p[off:off+blockBytes], encoderBlockSize); err != nil {
+			return written + off, err
 		}
 		off += blockBytes
 	}
-	e.leftover = append(e.leftover[:0], data[off:]...)
-	return len(p), nil
+
+	// 3. Stash the remainder (< one block) as leftover.
+	e.leftover = append(e.leftover[:0], p[off:]...)
+	return n, nil
 }
 
 // emitBlock feeds chunk (exactly n inter-channel samples) into MD5, deinterleaves
