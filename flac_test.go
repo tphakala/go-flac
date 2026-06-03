@@ -2,6 +2,8 @@ package flac_test
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"testing"
 
 	flac "github.com/tphakala/go-flac"
@@ -29,6 +31,22 @@ func TestEncoderSentinelDistinct(t *testing.T) {
 	}
 	if errors.Is(flac.ErrEncoderClosed, flac.ErrNotImplemented) {
 		t.Error("ErrEncoderClosed aliases ErrNotImplemented")
+	}
+}
+
+func TestM4Sentinels(t *testing.T) {
+	for _, e := range []error{flac.ErrTruncatedStream, flac.ErrInvalidSeek} {
+		if e == nil {
+			t.Fatal("nil sentinel")
+		}
+	}
+	if errors.Is(flac.ErrTruncatedStream, flac.ErrInvalidSeek) {
+		t.Error("ErrTruncatedStream aliases ErrInvalidSeek")
+	}
+	// ErrTruncatedStream wraps cleanly so a mid-frame truncation keeps io.ErrUnexpectedEOF in chain.
+	wrapped := fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpectedEOF)
+	if !errors.Is(wrapped, flac.ErrTruncatedStream) || !errors.Is(wrapped, io.ErrUnexpectedEOF) {
+		t.Error("wrapping does not preserve both errors")
 	}
 }
 
