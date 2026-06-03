@@ -106,6 +106,9 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		if maxPoints := (1<<24 - 1) / meta.SeekPointBytes; e.seekMaxPoints > maxPoints {
 			e.seekMaxPoints = maxPoints
 		}
+		// Reserve the points slice up front (only when a seek table was requested) so a
+		// long encode does not repeatedly grow it; it never exceeds seekMaxPoints.
+		e.points = make([]meta.SeekPoint, 0, e.seekMaxPoints)
 		e.nextBoundary = int64(e.seekInterval)
 		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
 		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
