@@ -41,15 +41,15 @@ func TestReadStreamInfo(t *testing.T) {
 	md5 := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	data := buildStreamInfoOnly(4096, 4096, 44100, 2, 16, 12345, md5)
 	br := bitio.NewReader(bytes.NewReader(data))
-	si, err := ReadMetadata(br)
+	sm, err := ReadMetadata(br)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if si.SampleRate != 44100 || si.Channels != 2 || si.BitDepth != 16 {
-		t.Fatalf("got %+v", si)
+	if sm.Info.SampleRate != 44100 || sm.Info.Channels != 2 || sm.Info.BitDepth != 16 {
+		t.Fatalf("got %+v", sm.Info)
 	}
-	if si.TotalSamples != 12345 || si.MD5 != md5 {
-		t.Fatalf("got total=%d md5=%x", si.TotalSamples, si.MD5)
+	if sm.Info.TotalSamples != 12345 || sm.Info.MD5 != md5 {
+		t.Fatalf("got total=%d md5=%x", sm.Info.TotalSamples, sm.Info.MD5)
 	}
 }
 
@@ -63,12 +63,12 @@ func TestSkipsLeadingID3v2(t *testing.T) {
 	id3 = append(id3, core...)
 	data := id3
 	br := bitio.NewReader(bytes.NewReader(data))
-	si, err := ReadMetadata(br)
+	sm, err := ReadMetadata(br)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if si.SampleRate != 48000 || si.Channels != 1 || si.BitDepth != 24 {
-		t.Fatalf("got %+v", si)
+	if sm.Info.SampleRate != 48000 || sm.Info.Channels != 1 || sm.Info.BitDepth != 24 {
+		t.Fatalf("got %+v", sm.Info)
 	}
 }
 
@@ -81,12 +81,12 @@ func TestSkipsID3v2WithFooter(t *testing.T) {
 	id3 = append(id3, make([]byte, 10)...) // footer (skipped via the footer flag)
 	id3 = append(id3, core...)
 	br := bitio.NewReader(bytes.NewReader(id3))
-	si, err := ReadMetadata(br)
+	sm, err := ReadMetadata(br)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if si.SampleRate != 44100 || si.Channels != 2 || si.BitDepth != 16 {
-		t.Fatalf("got %+v", si)
+	if sm.Info.SampleRate != 44100 || sm.Info.Channels != 2 || sm.Info.BitDepth != 16 {
+		t.Fatalf("got %+v", sm.Info)
 	}
 }
 
@@ -112,5 +112,29 @@ func TestBadMagic(t *testing.T) {
 	br := bitio.NewReader(bytes.NewReader([]byte("OggS....")))
 	if _, err := ReadMetadata(br); err == nil {
 		t.Fatal("want error on bad magic")
+	}
+}
+
+func TestReadMetadataCapturesSizes(t *testing.T) {
+	// A minimal stream: "fLaC" + STREAMINFO(last) with min=max block=4096,
+	// min frame=10, max frame=20, 44100 Hz, 2 ch, 16 bps, 0 samples, zero MD5.
+	si := flac.StreamInfo{SampleRate: 44100, Channels: 2, BitDepth: 16}
+	body := EncodeStreamInfo(si, 4096, 4096, 10, 20)
+	var buf bytes.Buffer
+	if err := WriteStreamHeader(&buf, body); err != nil {
+		t.Fatal(err)
+	}
+	sm, err := ReadMetadata(bitio.NewReader(bytes.NewReader(buf.Bytes())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sm.Info.SampleRate != 44100 || sm.Info.Channels != 2 || sm.Info.BitDepth != 16 {
+		t.Fatalf("StreamInfo wrong: %+v", sm.Info)
+	}
+	if sm.MinBlock != 4096 || sm.MaxBlock != 4096 || sm.MaxFrame != 20 {
+		t.Fatalf("sizes wrong: min=%d max=%d maxFrame=%d", sm.MinBlock, sm.MaxBlock, sm.MaxFrame)
+	}
+	if sm.SeekPoints != nil {
+		t.Fatalf("SeekPoints should be nil for a stream with no SEEKTABLE, got %v", sm.SeekPoints)
 	}
 }

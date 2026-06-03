@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	flac "github.com/tphakala/go-flac"
+	"github.com/tphakala/go-flac/internal/bitio"
+	"github.com/tphakala/go-flac/internal/frame"
+	"github.com/tphakala/go-flac/internal/meta"
 )
 
 // minimalStream returns a one-frame FLAC stream: "fLaC" + STREAMINFO (2ch,16bps,
@@ -103,15 +106,45 @@ func TestSeekToSampleUnsupported(t *testing.T) {
 	}
 }
 
-func TestSeekToSampleSeekableNotImplemented(t *testing.T) {
-	// A *bytes.Reader is an io.Seeker, so M2 reports the not-implemented sentinel
-	// (real seeking lands in M4) rather than ErrSeekUnsupported.
-	d, err := NewDecoder(bytes.NewReader(minimalStream(t)))
+func TestSeekSmoke(t *testing.T) {
+	data, samples := encodeRamp(t, 2, 16, 5*4096+123) // several frames + short final
+	dec, err := NewDecoder(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.SeekToSample(0); !errors.Is(err, flac.ErrNotImplemented) {
-		t.Fatalf("seekable source: want ErrNotImplemented, got %v", err)
+	got, err := dec.SeekToSample(10000)
+	if err != nil {
+		t.Fatalf("seek err = %v", err)
+	}
+	if got != 10000 {
+		t.Fatalf("seek returned %d, want 10000", got)
+	}
+	// Read the first inter-channel sample after the seek; channel 0 value must equal 10000.
+	bytesPS := 2
+	buf := make([]byte, 2*bytesPS) // one inter-channel sample (2 channels)
+	if _, err := io.ReadFull(dec, buf); err != nil {
+		t.Fatal(err)
+	}
+	v := int32(int16(uint16(buf[0]) | uint16(buf[1])<<8))
+	if v != 10000 {
+		t.Fatalf("sample at seek target = %d, want 10000", v)
+	}
+	_ = samples
+}
+
+func TestSeekUnsupportedAndInvalid(t *testing.T) {
+	data, _ := encodeRamp(t, 1, 16, 4096)
+	// Non-seekable source: wrap the bytes.Reader so it is only an io.Reader.
+	dec, err := NewDecoder(readerOnly{bytes.NewReader(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.SeekToSample(10); !errors.Is(err, flac.ErrSeekUnsupported) {
+		t.Fatalf("err = %v, want ErrSeekUnsupported", err)
+	}
+	dec2, _ := NewDecoder(bytes.NewReader(data))
+	if _, err := dec2.SeekToSample(-1); !errors.Is(err, flac.ErrInvalidSeek) {
+		t.Fatalf("err = %v, want ErrInvalidSeek", err)
 	}
 }
 
@@ -127,4 +160,108 @@ func TestDecoderTruncatedFrameErrors(t *testing.T) {
 	if _, err := io.ReadAll(d); err == nil {
 		t.Fatal("want an error decoding a truncated frame, got nil")
 	}
+}
+
+func TestDecoderInterFrameTruncationDetected(t *testing.T) {
+	data, samples := encodeRamp(t, 2, 16, 3*4096) // helper: returns FLAC bytes + sample count
+	zeroStreamInfoMD5(data)                       // helper: clears the 16 MD5 bytes in STREAMINFO
+
+	// Cut the stream at a frame boundary: keep metadata + first 2 frames.
+	cut := truncateAtFrameBoundary(t, data, 2) // helper: bytes up to the start of frame #2
+	dec, err := NewDecoder(bytes.NewReader(cut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(io.Discard, dec)
+	if !errors.Is(err, flac.ErrTruncatedStream) {
+		t.Fatalf("err = %v, want ErrTruncatedStream", err)
+	}
+	_ = samples
+}
+
+func TestDecoderMidFrameTruncationDetected(t *testing.T) {
+	data, _ := encodeRamp(t, 1, 16, 2*4096)
+	zeroStreamInfoMD5(data)
+	cut := data[:len(data)-5] // chop into the last frame's body
+	dec, err := NewDecoder(bytes.NewReader(cut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(io.Discard, dec)
+	if !errors.Is(err, flac.ErrTruncatedStream) || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("err = %v, want ErrTruncatedStream wrapping io.ErrUnexpectedEOF", err)
+	}
+}
+
+func TestDecoderCleanReadUnaffected(t *testing.T) {
+	data, _ := encodeRamp(t, 2, 16, 2*4096) // seekable encode keeps a valid MD5
+	dec, err := NewDecoder(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(io.Discard, dec); err != nil {
+		t.Fatalf("clean read err = %v", err)
+	}
+}
+
+// encodeRamp encodes a position-encoded ramp (sample value == inter-channel index,
+// per channel offset by channel index) and returns the FLAC bytes and sample count.
+func encodeRamp(t *testing.T, channels, bps, samples int) (flacBytes []byte, sampleCount int) {
+	t.Helper()
+	var sb seekBuffer
+	enc, err := NewEncoder(&sb, Config{SampleRate: 44100, Channels: channels, BitDepth: bps, CompressionLevel: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytesPS := (bps + 7) / 8
+	pcm := make([]byte, samples*channels*bytesPS)
+	idx := 0
+	for s := range samples {
+		for c := range channels {
+			v := uint32(int32(s + c))
+			for b := range bytesPS {
+				pcm[idx] = byte(v >> (uint(b) * 8))
+				idx++
+			}
+		}
+	}
+	if _, err := enc.Write(pcm); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return sb.Bytes(), samples
+}
+
+// zeroStreamInfoMD5 clears the 16-byte MD5 field of STREAMINFO (last 16 bytes of the
+// 34-byte body at StreamInfoBodyOffset), forcing the zero-MD5 code path.
+func zeroStreamInfoMD5(data []byte) {
+	off := 8 + 34 - 16 // StreamInfoBodyOffset + body - MD5 length
+	for i := range 16 {
+		data[off+i] = 0
+	}
+}
+
+// truncateAtFrameBoundary returns data up to the start of the nth audio frame by
+// decoding n frames and recording the byte offset. It reuses frame.FindNextFrame to
+// locate frame starts after the metadata section.
+func truncateAtFrameBoundary(t *testing.T, data []byte, n int) []byte {
+	t.Helper()
+	br := bitio.NewReader(bytes.NewReader(data))
+	sm, err := meta.ReadMetadata(br)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio := int(br.BytesRead())
+	off := audio
+	var fr frame.Frame
+	for i := range n {
+		s, consumed, res := frame.FindNextFrame(data[off:], sm.Info, &fr)
+		if res != frame.FrameFound {
+			t.Fatalf("frame %d not found: %v", i, res)
+		}
+		off += s + consumed
+	}
+	return data[:off]
 }
