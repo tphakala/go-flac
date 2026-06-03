@@ -41,3 +41,23 @@ func TestEncodeStereo64RoundTrip32(t *testing.T) {
 		}
 	}
 }
+
+// EncodeFrame must route bps >= 25 through the int64 path. Mono (independent) 32-bps:
+// each subframe must decode via the generic decodeSubframe64 (validated end-to-end in
+// Task 9). Here, assert the frame is produced and is smaller than the verbatim bound.
+func TestEncodeFrameWideMono(t *testing.T) {
+	const bps = 32
+	bs := 1024
+	mono := asInt32(wideSamples(bs, bps, 7))
+	p := paramsLevel(t, 5)
+	si := flac.StreamInfo{SampleRate: 48000, Channels: 1, BitDepth: bps}
+
+	bw := bitio.NewWriter()
+	data := EncodeFrame(bw, p, si, [][]int32{mono}, 0)
+	if len(data) == 0 {
+		t.Fatal("EncodeFrame produced no bytes")
+	}
+	if len(data)*8 > (4+bs)*bps+1024 {
+		t.Fatalf("wide mono frame unexpectedly large: %d bytes", len(data))
+	}
+}
