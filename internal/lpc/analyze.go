@@ -177,13 +177,14 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 // constraints (non-negative shift, coeffs fit the precision range).
 func AnalyzeLPC(samples []int32, window []float64, maxOrder, precision, eff int) (order, shift int, qcoeff []int32, ok bool) {
 	n := len(samples)
-	mo := maxOrder
-	if mo > n-1 {
-		mo = n - 1
+	if len(window) != n {
+		// Defensive: the documented precondition is len(window) == len(samples).
+		// The encoder always sizes the window to the block length, so a mismatch
+		// is a programming error; treat it as "LPC not applicable" rather than
+		// panicking on window[i] below.
+		return 0, 0, nil, false
 	}
-	if mo > 32 {
-		mo = 32
-	}
+	mo := min(maxOrder, n-1, 32)
 	if mo < 1 {
 		return 0, 0, nil, false
 	}
