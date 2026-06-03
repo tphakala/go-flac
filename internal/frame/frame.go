@@ -20,7 +20,7 @@ type Frame struct {
 	Number        uint64    // sample number (variable blocksize) or frame number (fixed)
 
 	work32 [2][]int32 // reusable stereo-decorrelation scratch (common path)
-	work64 [2][]int64 // reusable scratch for the 32-bps side-channel path
+	work64 [2][]int64 // reusable scratch for the wide (25-32 bps) int64 decode path
 }
 
 // header holds the parsed frame header.
@@ -71,9 +71,28 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	ensureChannels(dst, nch, hdr.blockSize)
 
 	if hdr.channelAssignment <= 7 {
-		for ch := range nch {
-			if err := decodeSubframe(br, dst.Channels[ch][:hdr.blockSize], hdr.bitsPerSample); err != nil {
-				return err
+		bps := hdr.bitsPerSample
+		if bps >= 25 {
+			// Wide path: residuals can exceed int32, so decode each channel in int64
+			// scratch then narrow to the int32 output (a valid sample fits int32).
+			if cap(dst.work64[0]) < hdr.blockSize {
+				dst.work64[0] = make([]int64, hdr.blockSize)
+			}
+			scratch := dst.work64[0][:hdr.blockSize]
+			for ch := range nch {
+				if err := decodeSubframe64(br, scratch, bps); err != nil {
+					return err
+				}
+				out := dst.Channels[ch][:hdr.blockSize]
+				for i, v := range scratch {
+					out[i] = int32(v)
+				}
+			}
+		} else {
+			for ch := range nch {
+				if err := decodeSubframe(br, dst.Channels[ch][:hdr.blockSize], bps); err != nil {
+					return err
+				}
 			}
 		}
 	} else if err := decodeStereoDecorrelated(br, &hdr, dst); err != nil {
@@ -117,9 +136,11 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 	bps := hdr.bitsPerSample
 	out0, out1 := dst.Channels[0][:bs], dst.Channels[1][:bs]
 
-	if bps == 32 {
+	if bps >= 25 {
 		if cap(dst.work64[0]) < bs {
 			dst.work64[0] = make([]int64, bs)
+		}
+		if cap(dst.work64[1]) < bs {
 			dst.work64[1] = make([]int64, bs)
 		}
 		a := dst.work64[0][:bs]
@@ -155,6 +176,8 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 
 	if cap(dst.work32[0]) < bs {
 		dst.work32[0] = make([]int32, bs)
+	}
+	if cap(dst.work32[1]) < bs {
 		dst.work32[1] = make([]int32, bs)
 	}
 	a := dst.work32[0][:bs]

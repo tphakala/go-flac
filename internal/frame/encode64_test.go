@@ -1,0 +1,64 @@
+package frame
+
+import (
+	"testing"
+
+	flac "github.com/tphakala/go-flac"
+	"github.com/tphakala/go-flac/internal/bitio"
+)
+
+// encodeStereo64 must produce a frame that frame.Decode reconstructs exactly at 32 bps.
+// frame.Decode already dispatches int64 for 32-bps stereo decorrelation, so this test
+// does not depend on the independent-channel wide dispatch. The channels are strongly
+// correlated so a side-using mode (assignment >= 8) is chosen; that keeps decode on the
+// int64 stereo decorrelation path rather than the independent path.
+func TestEncodeStereo64RoundTrip32(t *testing.T) {
+	const bps = 32
+	bs := 2048
+	l64 := wideSamples(bs, bps, 11)
+	r64 := make([]int64, bs)
+	for i := range r64 {
+		r64[i] = l64[i] - int64(i%7) + 3
+	}
+	l, r := asInt32(l64), asInt32(r64)
+
+	p := paramsLevel(t, 8)
+	si := flac.StreamInfo{SampleRate: 96000, Channels: 2, BitDepth: bps}
+
+	bw := bitio.NewWriter()
+	bw.Reset()
+	encodeStereo64(bw, p, bps, bs, l, r, 0)
+	data := bw.Bytes()
+
+	var fr Frame
+	br := bitio.NewReader(bytesReaderFrame(data))
+	if err := Decode(br, si, &fr); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	for i := range bs {
+		if fr.Channels[0][i] != l[i] || fr.Channels[1][i] != r[i] {
+			t.Fatalf("sample[%d] = (%d,%d), want (%d,%d)", i, fr.Channels[0][i], fr.Channels[1][i], l[i], r[i])
+		}
+	}
+}
+
+// EncodeFrame must route bps >= 25 through the int64 path. Mono (independent) 32-bps:
+// each subframe must decode via the generic decodeSubframe64 (validated end-to-end by the
+// decode round-trip tests). Here, assert the frame is produced and is smaller than the
+// verbatim bound.
+func TestEncodeFrameWideMono(t *testing.T) {
+	const bps = 32
+	bs := 1024
+	mono := asInt32(wideSamples(bs, bps, 7))
+	p := paramsLevel(t, 5)
+	si := flac.StreamInfo{SampleRate: 48000, Channels: 1, BitDepth: bps}
+
+	bw := bitio.NewWriter()
+	data := EncodeFrame(bw, p, si, [][]int32{mono}, 0)
+	if len(data) == 0 {
+		t.Fatal("EncodeFrame produced no bytes")
+	}
+	if len(data)*8 > (4+bs)*bps+1024 {
+		t.Fatalf("wide mono frame unexpectedly large: %d bytes", len(data))
+	}
+}

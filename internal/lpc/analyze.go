@@ -182,7 +182,7 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 // ok=false when LPC is not applicable (block too short, windowed silence,
 // degenerate analysis). The returned coefficients always satisfy the decoder's
 // constraints (non-negative shift, coeffs fit the precision range).
-func AnalyzeLPC(samples []int32, window []float64, maxOrder, precision, eff int) (order, shift int, qcoeff []int32, ok bool) {
+func AnalyzeLPC[T Sample](samples []T, window []float64, maxOrder, precision, eff int) (order, shift int, qcoeff []int32, ok bool) {
 	if precision < 1 || precision > 15 {
 		// The 4-bit subframe precision field stores precision-1, and the decoder
 		// rejects the reserved code 15 (precision 16). A zero or out-of-range

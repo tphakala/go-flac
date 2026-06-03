@@ -17,6 +17,19 @@ func ComputeFixedResiduals(res, src []int32, order int) {
 	}
 }
 
+// ComputeFixedResiduals64 is the int64 analogue of ComputeFixedResiduals.
+func ComputeFixedResiduals64(res, src []int64, order int) {
+	coeffs := fixedCoeffs[order]
+	for i := range res {
+		n := order + i
+		var pred int64
+		for j, c := range coeffs {
+			pred += c * src[n-1-j]
+		}
+		res[i] = src[n] - pred
+	}
+}
+
 // ComputeLPCResiduals computes the residuals for a quantized LPC predictor.
 // It is the exact integer inverse of RestoreLPC: for each n = order+i,
 //
@@ -34,6 +47,19 @@ func ComputeLPCResiduals(res, src, qcoeff []int32, shift, order int) {
 			pred += int64(c) * int64(src[n-1-j])
 		}
 		res[i] = src[n] - int32(pred>>uint(shift))
+	}
+}
+
+// ComputeLPCResiduals64 is the int64 analogue of ComputeLPCResiduals and the exact
+// integer inverse of RestoreLPC[int64].
+func ComputeLPCResiduals64(res, src []int64, qcoeff []int32, shift, order int) {
+	for i := range res {
+		n := order + i
+		var pred int64
+		for j, c := range qcoeff {
+			pred += int64(c) * src[n-1-j]
+		}
+		res[i] = src[n] - (pred >> uint(shift))
 	}
 }
 
@@ -61,6 +87,37 @@ func BestFixedOrder(src []int32, maxOrder int) int {
 				sum -= int64(v)
 			} else {
 				sum += int64(v)
+			}
+		}
+		if bestSum < 0 || sum < bestSum {
+			bestSum, bestOrder = sum, order
+		}
+	}
+	return bestOrder
+}
+
+// BestFixedOrder64 is the int64 analogue of BestFixedOrder.
+func BestFixedOrder64(src []int64, maxOrder int) int {
+	if maxOrder > 4 {
+		maxOrder = 4
+	}
+	if maxOrder > len(src)-1 {
+		maxOrder = len(src) - 1
+	}
+	if maxOrder < 0 {
+		return 0
+	}
+	bestOrder, bestSum := 0, int64(-1)
+	res := make([]int64, len(src))
+	for order := range maxOrder + 1 {
+		r := res[:len(src)-order]
+		ComputeFixedResiduals64(r, src, order)
+		var sum int64
+		for _, v := range r {
+			if v < 0 {
+				sum -= v
+			} else {
+				sum += v
 			}
 		}
 		if bestSum < 0 || sum < bestSum {

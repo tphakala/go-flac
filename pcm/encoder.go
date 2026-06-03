@@ -47,8 +47,8 @@ type Encoder struct {
 var _ io.WriteCloser = (*Encoder)(nil)
 
 // NewEncoder returns an Encoder that writes a FLAC stream to w using cfg. It writes
-// the stream marker and a placeholder STREAMINFO immediately. M3 supports bit
-// depths 4..24; other depths are rejected.
+// the stream marker and a placeholder STREAMINFO immediately. Supported bit depths
+// are 4..32; other depths are rejected.
 func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 	if w == nil {
 		return nil, errors.New("go-flac/pcm: NewEncoder: nil writer")
@@ -58,8 +58,8 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		// so a larger rate would be silently truncated.
 		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: invalid config %+v", cfg)
 	}
-	if cfg.BitDepth < 4 || cfg.BitDepth > 24 {
-		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: bit depth %d outside supported 4..24 (M3)", cfg.BitDepth)
+	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
+		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: bit depth %d outside supported 4..32", cfg.BitDepth)
 	}
 
 	e := &Encoder{
