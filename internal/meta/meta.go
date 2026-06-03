@@ -9,11 +9,14 @@ import (
 	"github.com/tphakala/go-flac/internal/bitio"
 )
 
-// Metadata block types (FLAC spec).
+// Metadata block types (FLAC spec). TypePadding and TypeSeekTable are exported so the
+// pcm encoder can reference them when laying out the reserved metadata region.
 const (
 	typeStreamInfo = 0
-	typePadding    = 1
-	typeSeekTable  = 3
+	// TypePadding is the PADDING metadata block type.
+	TypePadding = 1
+	// TypeSeekTable is the SEEKTABLE metadata block type.
+	TypeSeekTable = 3
 	// 2 APPLICATION, 4 VORBIS_COMMENT, 5 CUESHEET, 6 PICTURE are recognized and
 	// skipped by length; 127 is invalid.
 	typeInvalid = 127
@@ -62,7 +65,7 @@ func readMetadata(br *bitio.Reader) (StreamMeta, error) {
 			}
 			sm.Info, sm.MinBlock, sm.MaxBlock, sm.MaxFrame = si, mnb, mxb, mxf
 			haveStreamInfo = true
-		case typeSeekTable:
+		case TypeSeekTable:
 			body, err := readBytes(br, int(length))
 			if err != nil {
 				return StreamMeta{}, err

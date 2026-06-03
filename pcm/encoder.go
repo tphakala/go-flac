@@ -100,21 +100,28 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		if e.seekMaxPoints <= 0 {
 			e.seekMaxPoints = defaultSeekMaxPoints
 		}
+		// A metadata block length is 24 bits, so the SEEKTABLE body (seekMaxPoints points
+		// of SeekPointBytes each) must fit; clamp to the limit rather than silently
+		// truncating the length into a corrupt header.
+		if maxPoints := (1<<24 - 1) / meta.SeekPointBytes; e.seekMaxPoints > maxPoints {
+			e.seekMaxPoints = maxPoints
+		}
 		e.nextBoundary = int64(e.seekInterval)
 		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
 		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
 			return nil, err
 		}
 		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
-		if _, err := w.Write(meta.EncodeBlockHeader(false, 3 /*SEEKTABLE*/, len(stBody))); err != nil {
+		if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, len(stBody))); err != nil {
 			return nil, err
 		}
-		// SEEKTABLE body offset = "fLaC"(4) + STREAMINFO header(4) + body(34) + SEEKTABLE header(4).
-		e.seekBodyOff = int64(4 + 4 + meta.StreamInfoBodyLen + 4)
+		// SEEKTABLE body offset = "fLaC" + STREAMINFO header (StreamInfoBodyOffset) +
+		// STREAMINFO body + SEEKTABLE header (4).
+		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + 4)
 		if _, err := w.Write(stBody); err != nil {
 			return nil, err
 		}
-		if _, err := w.Write(meta.EncodeBlockHeader(true, 1 /*PADDING*/, 0)); err != nil { // last=1
+		if _, err := w.Write(meta.EncodeBlockHeader(true, meta.TypePadding, 0)); err != nil { // last=1
 			return nil, err
 		}
 	} else {
@@ -271,14 +278,14 @@ func (e *Encoder) Close() error {
 			if _, err := e.ws.Seek(e.seekBodyOff-4, io.SeekStart); err != nil {
 				return fmt.Errorf("go-flac/pcm: Close: seek to SEEKTABLE header: %w", err)
 			}
-			if _, err := e.ws.Write(meta.EncodeBlockHeader(false, 3 /*SEEKTABLE*/, used*18)); err != nil {
+			if _, err := e.ws.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, used*meta.SeekPointBytes)); err != nil {
 				return fmt.Errorf("go-flac/pcm: Close: shrink SEEKTABLE: %w", err)
 			}
-			if _, err := e.ws.Seek(e.seekBodyOff+int64(used*18), io.SeekStart); err != nil {
+			if _, err := e.ws.Seek(e.seekBodyOff+int64(used*meta.SeekPointBytes), io.SeekStart); err != nil {
 				return fmt.Errorf("go-flac/pcm: Close: seek to PADDING: %w", err)
 			}
-			padLen := (e.seekMaxPoints - used) * 18 // (N-used)*18, exact (spec section 4.4)
-			if _, err := e.ws.Write(meta.EncodeBlockHeader(true, 1 /*PADDING*/, padLen)); err != nil {
+			padLen := (e.seekMaxPoints - used) * meta.SeekPointBytes // (N-used)*18, exact (spec section 4.4)
+			if _, err := e.ws.Write(meta.EncodeBlockHeader(true, meta.TypePadding, padLen)); err != nil {
 				return fmt.Errorf("go-flac/pcm: Close: write PADDING header: %w", err)
 			}
 		}

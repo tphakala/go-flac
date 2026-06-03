@@ -135,6 +135,6 @@ func TestReadMetadataCapturesSizes(t *testing.T) {
 		t.Fatalf("sizes wrong: min=%d max=%d maxFrame=%d", sm.MinBlock, sm.MaxBlock, sm.MaxFrame)
 	}
 	if sm.SeekPoints != nil {
-		t.Fatalf("SeekPoints should be nil in M4a, got %v", sm.SeekPoints)
+		t.Fatalf("SeekPoints should be nil for a stream with no SEEKTABLE, got %v", sm.SeekPoints)
 	}
 }

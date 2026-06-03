@@ -26,11 +26,11 @@ type Decoder struct {
 	streamEnd    int64            // absolute file size
 	nominalBlock int              // STREAMINFO max block size; fixed-blocksize nominal
 	maxFrame     int              // STREAMINFO max frame size (0 unknown), seek-probe sizing
-	seekPoints   []meta.SeekPoint // nil until M4b parsing (Task 8)
+	seekPoints   []meta.SeekPoint // parsed SEEKTABLE points (nil when absent); narrows seeks
 
 	frame      frame.Frame
-	probeFrame frame.Frame // scratch for seek probes (Task 5)
-	probeBuf   []byte      // reusable seek-probe read buffer (Task 5)
+	probeFrame frame.Frame // scratch frame decoded by seek probes
+	probeBuf   []byte      // reusable seek-probe read buffer
 	buf        []byte      // packed PCM backing buffer, reused across frames
 	pending    []byte      // unread window into buf
 	bytesPS    int         // bytes per sample = ceil(bps/8)
@@ -57,9 +57,11 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 	if seekable {
 		// Capture the absolute position where the FLAC stream begins, before any byte
 		// is consumed, so audioStart is absolute even if r was advanced past a header.
-		var err error
-		if base, err = rs.Seek(0, io.SeekCurrent); err != nil {
-			return nil, err
+		b, err := rs.Seek(0, io.SeekCurrent)
+		if err != nil {
+			seekable = false // advertises io.Seeker but cannot seek; decode forward-only
+		} else {
+			base = b
 		}
 	}
 	br := bitio.NewReader(r)
@@ -74,22 +76,30 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 		md5:     md5.New(),
 	}
 	if seekable {
-		d.rs = rs
-		d.seekable = true
-		d.audioStart = base + br.BytesRead()
-		resume, err := rs.Seek(0, io.SeekCurrent) // bufio-advanced absolute file pos
-		if err != nil {
-			return nil, err
+		audioStart := base + br.BytesRead()
+		resume, serr := rs.Seek(0, io.SeekCurrent) // bufio-advanced absolute file pos
+		var streamEnd int64
+		if serr == nil {
+			streamEnd, serr = rs.Seek(0, io.SeekEnd)
 		}
-		if d.streamEnd, err = rs.Seek(0, io.SeekEnd); err != nil {
-			return nil, err
+		if serr == nil {
+			if _, rerr := rs.Seek(resume, io.SeekStart); rerr != nil { // restore; bufio buffer stays valid
+				// The cursor was advanced to EOF to measure length but cannot be restored,
+				// so the reader can no longer forward-decode: surface this as a hard error.
+				return nil, rerr
+			}
+			d.rs = rs
+			d.seekable = true
+			d.audioStart = audioStart
+			d.streamEnd = streamEnd
+			d.nominalBlock = sm.MaxBlock
+			d.maxFrame = sm.MaxFrame
+			d.seekPoints = sm.SeekPoints
 		}
-		if _, err = rs.Seek(resume, io.SeekStart); err != nil { // restore; bufio buffer stays valid
-			return nil, err
-		}
-		d.nominalBlock = sm.MaxBlock
-		d.maxFrame = sm.MaxFrame
-		d.seekPoints = sm.SeekPoints
+		// If serr != nil the source advertises io.Seeker but cannot be measured (no
+		// SeekEnd support, etc.). The failed SeekCurrent/SeekEnd leaves the read cursor
+		// in place, so the decoder degrades to forward-only (d.seekable stays false)
+		// rather than failing construction.
 	}
 	return d, nil
 }
@@ -99,6 +109,11 @@ func (d *Decoder) Info() flac.StreamInfo { return d.info }
 
 // probeChunkDefault sizes seek-probe reads when STREAMINFO max frame size is unknown.
 const probeChunkDefault = 1 << 18 // 256 KiB
+
+// maxProbeWindow caps a single seek-probe read. A real FLAC frame is far smaller, so
+// this bounds memory if a malformed STREAMINFO max frame size or a crafted truncated
+// frame would otherwise drive the probe window to the whole stream.
+const maxProbeWindow = 1 << 24 // 16 MiB
 
 // SeekToSample positions the decoder so the next Read/WriteTo yields audio starting at
 // sampleIndex. It requires the source to be an io.Seeker. It returns the sample index
@@ -116,6 +131,14 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	if total := int64(d.info.TotalSamples); total > 0 && sampleIndex >= total {
 		return d.seekToEnd(total)
 	}
+	if d.nominalBlock <= 0 {
+		// STREAMINFO did not record a max block size (MaxBlock == 0). Discover the
+		// fixed-blocksize nominal block size from the first frame so frame numbers map to
+		// sample numbers; for a variable-blocksize stream it stays 0 and is unused.
+		if err := d.ensureNominalBlock(); err != nil {
+			return 0, err
+		}
+	}
 	lo, hi := d.audioStart, d.streamEnd
 	if len(d.seekPoints) > 0 {
 		lo, hi = d.narrowBySeekTable(sampleIndex, lo, hi)
@@ -130,6 +153,11 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	landed, err := d.land(landStart, sampleIndex, fs)
 	if err != nil {
 		return 0, err
+	}
+	if total := int64(d.info.TotalSamples); total > 0 && landed > total {
+		// A corrupt stream whose frame numbers disagree with the declared STREAMINFO total
+		// can overshoot past it; never report a position beyond the stream's bounds.
+		landed = total
 	}
 	return landed, nil
 }
@@ -152,7 +180,11 @@ func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample in
 		f := d.firstSample(&d.probeFrame)
 		switch {
 		case f > target:
-			hi = start
+			if start >= hi {
+				hi = mid // [mid, hi) holds no frame; the target frame is below mid
+			} else {
+				hi = start
+			}
 		case target >= f+int64(d.probeFrame.BlockSize):
 			lo = end
 		default:
@@ -198,6 +230,9 @@ func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 	if window < probeChunkDefault {
 		window = probeChunkDefault
 	}
+	if window > maxProbeWindow {
+		window = maxProbeWindow
+	}
 	for b < d.streamEnd {
 		n := d.streamEnd - b
 		if n > window {
@@ -210,26 +245,50 @@ func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 			d.probeBuf = make([]byte, n)
 		}
 		buf := d.probeBuf[:n]
-		if _, err = io.ReadFull(d.rs, buf); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return 0, 0, false, err
+		rn, rerr := io.ReadFull(d.rs, buf)
+		if rerr != nil && !errors.Is(rerr, io.ErrUnexpectedEOF) && !errors.Is(rerr, io.EOF) {
+			return 0, 0, false, rerr
 		}
+		buf = buf[:rn] // only the bytes actually read; the reused buffer tail is stale
+		// A short read means the source ended before the measured streamEnd (truncated
+		// since NewDecoder measured it), so this is the physical end of the stream.
+		atEnd := b+int64(rn) >= d.streamEnd || int64(rn) < n
 		s, consumed, res := frame.FindNextFrame(buf, d.info, &d.probeFrame)
 		switch res {
 		case frame.FrameFound:
 			return b + int64(s), b + int64(s+consumed), true, nil
 		case frame.FrameTruncated:
-			if b+n >= d.streamEnd {
-				return 0, 0, false, nil // truncated at the true EOF: no complete frame
-			}
-			window *= 2 // grow and retry from the same base
-		default: // FrameNotFound
-			if b+n >= d.streamEnd {
+			if atEnd || window >= maxProbeWindow {
+				// At the true EOF, or no complete frame fits the bounded probe window (a
+				// real FLAC frame is far smaller, so this is malformed): give up.
 				return 0, 0, false, nil
 			}
-			b += n - 1 // advance, overlapping 1 byte for a sync straddling the boundary
+			window *= 2 // grow and retry from the same base
+			if window > maxProbeWindow {
+				window = maxProbeWindow
+			}
+		default: // FrameNotFound
+			if atEnd {
+				return 0, 0, false, nil
+			}
+			b += int64(rn) - 1 // advance, overlapping 1 byte for a sync straddling the boundary
 		}
 	}
 	return 0, 0, false, nil
+}
+
+// ensureNominalBlock discovers the fixed-blocksize nominal block size from the first
+// audio frame when STREAMINFO did not record a max block size (MaxBlock == 0). For a
+// variable-blocksize stream the nominal block size is unused, so it is left at zero.
+func (d *Decoder) ensureNominalBlock() error {
+	_, _, ok, err := d.probe(d.audioStart)
+	if err != nil {
+		return err
+	}
+	if ok && !d.probeFrame.VariableBlockSize {
+		d.nominalBlock = d.probeFrame.BlockSize
+	}
+	return nil
 }
 
 // land seeks to landStart, decodes the containing frame, and drops (target-fs) leading
@@ -264,8 +323,8 @@ func (d *Decoder) seekToEnd(total int64) (int64, error) {
 	return total, nil
 }
 
-// narrowBySeekTable tightens [lo, hi] using the bracketing SEEKTABLE points (M4b fills
-// d.seekPoints; in M4a it is empty and this is never called).
+// narrowBySeekTable tightens [lo, hi] using the bracketing SEEKTABLE points. When no
+// SEEKTABLE was present d.seekPoints is empty and this is never called.
 func (d *Decoder) narrowBySeekTable(target, lo, hi int64) (newLo, newHi int64) {
 	newLo, newHi = lo, hi
 	for _, p := range d.seekPoints {

@@ -1,6 +1,10 @@
 package meta
 
-import flac "github.com/tphakala/go-flac"
+import (
+	"encoding/binary"
+
+	flac "github.com/tphakala/go-flac"
+)
 
 // PlaceholderSampleNumber marks an unused SEEKTABLE point (FLAC spec).
 const PlaceholderSampleNumber uint64 = 0xFFFFFFFFFFFFFFFF
@@ -23,8 +27,8 @@ type StreamMeta struct {
 	SeekPoints []SeekPoint
 }
 
-// seekPointBytes is the on-disk size of one SEEKTABLE point.
-const seekPointBytes = 18
+// SeekPointBytes is the on-disk size of one SEEKTABLE point.
+const SeekPointBytes = 18
 
 // EncodeBlockHeader returns the 4-byte metadata block header: 1-bit last-block flag,
 // 7-bit block type, 24-bit big-endian body length.
@@ -38,13 +42,12 @@ func EncodeBlockHeader(last bool, btype, length int) []byte {
 
 // EncodeSeekPoints serializes points to a SEEKTABLE body (18 bytes each, big-endian).
 func EncodeSeekPoints(points []SeekPoint) []byte {
-	out := make([]byte, 0, len(points)*seekPointBytes)
+	out := make([]byte, 0, len(points)*SeekPointBytes)
 	for _, p := range points {
-		var b [seekPointBytes]byte
-		putUint64(b[0:8], p.SampleNumber)
-		putUint64(b[8:16], p.ByteOffset)
-		b[16] = byte(p.FrameSamples >> 8)
-		b[17] = byte(p.FrameSamples)
+		var b [SeekPointBytes]byte
+		binary.BigEndian.PutUint64(b[0:8], p.SampleNumber)
+		binary.BigEndian.PutUint64(b[8:16], p.ByteOffset)
+		binary.BigEndian.PutUint16(b[16:18], p.FrameSamples)
 		out = append(out, b[:]...)
 	}
 	return out
@@ -53,34 +56,20 @@ func EncodeSeekPoints(points []SeekPoint) []byte {
 // parseSeekTable parses a SEEKTABLE body (a multiple of 18 bytes), dropping placeholder
 // points. A length not divisible by 18 is malformed.
 func parseSeekTable(body []byte) ([]SeekPoint, error) {
-	if len(body)%seekPointBytes != 0 {
+	if len(body)%SeekPointBytes != 0 {
 		return nil, flac.ErrUnsupported
 	}
-	out := make([]SeekPoint, 0, len(body)/seekPointBytes)
-	for i := 0; i < len(body); i += seekPointBytes {
-		sn := getUint64(body[i : i+8])
+	out := make([]SeekPoint, 0, len(body)/SeekPointBytes)
+	for i := 0; i < len(body); i += SeekPointBytes {
+		sn := binary.BigEndian.Uint64(body[i : i+8])
 		if sn == PlaceholderSampleNumber {
 			continue
 		}
 		out = append(out, SeekPoint{
 			SampleNumber: sn,
-			ByteOffset:   getUint64(body[i+8 : i+16]),
-			FrameSamples: uint16(body[i+16])<<8 | uint16(body[i+17]),
+			ByteOffset:   binary.BigEndian.Uint64(body[i+8 : i+16]),
+			FrameSamples: binary.BigEndian.Uint16(body[i+16 : i+18]),
 		})
 	}
 	return out, nil
-}
-
-func putUint64(b []byte, v uint64) {
-	for i := range 8 {
-		b[i] = byte(v >> (uint(7-i) * 8))
-	}
-}
-
-func getUint64(b []byte) uint64 {
-	var v uint64
-	for i := range 8 {
-		v = v<<8 | uint64(b[i])
-	}
-	return v
 }
