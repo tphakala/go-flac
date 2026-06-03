@@ -50,3 +50,18 @@ func TukeyWindow(n int, alpha float64) []float64 {
 	}
 	return w
 }
+
+// autocorrelate returns the autocorrelation of x for lags 0..maxLag inclusive,
+// so the result has length maxLag+1. autoc[lag] = sum_{i=lag}^{N-1} x[i]*x[i-lag].
+func autocorrelate(x []float64, maxLag int) []float64 {
+	autoc := make([]float64, maxLag+1)
+	n := len(x)
+	for lag := 0; lag <= maxLag; lag++ {
+		var sum float64
+		for i := lag; i < n; i++ {
+			sum += x[i] * x[i-lag]
+		}
+		autoc[lag] = sum
+	}
+	return autoc
+}

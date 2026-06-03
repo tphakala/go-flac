@@ -43,3 +43,20 @@ func TestTukeyWindowEdgeCases(t *testing.T) {
 		t.Fatalf("n=1: got %v, want [1]", got)
 	}
 }
+
+func TestAutocorrelate(t *testing.T) {
+	x := []float64{1, 2, 3}
+	autoc := autocorrelate(x, 2)
+	// autoc[0] = 1*1 + 2*2 + 3*3 = 14
+	// autoc[1] = 2*1 + 3*2 = 8
+	// autoc[2] = 3*1 = 3
+	want := []float64{14, 8, 3}
+	if len(autoc) != len(want) {
+		t.Fatalf("len = %d, want %d", len(autoc), len(want))
+	}
+	for i := range want {
+		if math.Abs(autoc[i]-want[i]) > 1e-12 {
+			t.Fatalf("autoc[%d] = %v, want %v", i, autoc[i], want[i])
+		}
+	}
+}
