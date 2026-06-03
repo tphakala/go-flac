@@ -97,15 +97,187 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 // Info returns the stream's STREAMINFO-derived properties.
 func (d *Decoder) Info() flac.StreamInfo { return d.info }
 
-// SeekToSample moves the read position to the given inter-channel sample index.
-// Implemented in M4; until then it reports ErrSeekUnsupported for non-seekable
-// sources and a not-implemented error for seekable ones.
+// probeChunkDefault sizes seek-probe reads when STREAMINFO max frame size is unknown.
+const probeChunkDefault = 1 << 18 // 256 KiB
+
+// SeekToSample positions the decoder so the next Read/WriteTo yields audio starting at
+// sampleIndex. It requires the source to be an io.Seeker. It returns the sample index
+// positioned at (== sampleIndex on success). Seeking to or past a known TotalSamples,
+// or past the true end of an unknown-length stream, positions at end-of-stream and
+// returns the stream's total sample count (the next read is io.EOF). A negative index
+// returns ErrInvalidSeek; a non-seekable source returns ErrSeekUnsupported.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
-	_ = sampleIndex // used once seeking lands in M4
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
 	}
-	return 0, flac.ErrNotImplemented
+	if sampleIndex < 0 {
+		return 0, flac.ErrInvalidSeek
+	}
+	if total := int64(d.info.TotalSamples); total > 0 && sampleIndex >= total {
+		return d.seekToEnd(total)
+	}
+	lo, hi := d.audioStart, d.streamEnd
+	if len(d.seekPoints) > 0 {
+		lo, hi = d.narrowBySeekTable(sampleIndex, lo, hi)
+	}
+	landStart, fs, endSample, err := d.searchFrame(sampleIndex, lo, hi)
+	if err != nil {
+		return 0, err
+	}
+	if landStart < 0 { // target is past the true end of an unknown-length stream
+		return d.seekToEnd(endSample)
+	}
+	landed, err := d.land(landStart, sampleIndex, fs)
+	if err != nil {
+		return 0, err
+	}
+	return landed, nil
+}
+
+// searchFrame returns the byte offset and first sample of the frame containing target.
+// landStart < 0 means target is past the stream end; endSample is then the total
+// number of samples in the stream (last frame first sample + its block size).
+func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample int64, err error) {
+	const linearWindow = 1 << 16 // bytes; below this, scan forward frame by frame
+	for hi-lo > linearWindow {
+		mid := lo + (hi-lo)/2
+		start, end, ok, perr := d.probe(mid)
+		if perr != nil {
+			return 0, 0, 0, perr
+		}
+		if !ok { // no valid frame in [mid, hi): search lower
+			hi = mid
+			continue
+		}
+		f := d.firstSample(&d.probeFrame)
+		switch {
+		case f > target:
+			hi = start
+		case target >= f+int64(d.probeFrame.BlockSize):
+			lo = end
+		default:
+			return start, f, 0, nil
+		}
+	}
+	// Linear scan the small remaining window.
+	b := lo
+	for {
+		start, end, ok, perr := d.probe(b)
+		if perr != nil {
+			return 0, 0, 0, perr
+		}
+		if !ok { // reached EOF without containing frame: target is past the true end
+			return -1, 0, endSample, nil
+		}
+		f := d.firstSample(&d.probeFrame)
+		endSample = f + int64(d.probeFrame.BlockSize)
+		switch {
+		case f <= target && target < endSample:
+			return start, f, 0, nil
+		case f > target: // overshot (rare): land at this frame's first sample
+			return start, f, 0, nil
+		default:
+			b = end
+		}
+	}
+}
+
+// firstSample returns the first inter-channel sample index of a decoded frame.
+func (d *Decoder) firstSample(fr *frame.Frame) int64 {
+	if fr.VariableBlockSize {
+		return int64(fr.Number) // coded sample number
+	}
+	return int64(fr.Number) * int64(d.nominalBlock) // frame number * nominal block size
+}
+
+// probe finds the first CRC-16-valid frame at or after absolute offset b, decoding it
+// into d.probeFrame. It returns the frame's absolute start and end offsets, or ok=false
+// when no complete frame remains before streamEnd. It does not disturb d.br.
+func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
+	window := int64(2 * d.maxFrame)
+	if window < probeChunkDefault {
+		window = probeChunkDefault
+	}
+	for b < d.streamEnd {
+		n := d.streamEnd - b
+		if n > window {
+			n = window
+		}
+		if _, err = d.rs.Seek(b, io.SeekStart); err != nil {
+			return 0, 0, false, err
+		}
+		if int64(cap(d.probeBuf)) < n {
+			d.probeBuf = make([]byte, n)
+		}
+		buf := d.probeBuf[:n]
+		if _, err = io.ReadFull(d.rs, buf); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return 0, 0, false, err
+		}
+		s, consumed, res := frame.FindNextFrame(buf, d.info, &d.probeFrame)
+		switch res {
+		case frame.FrameFound:
+			return b + int64(s), b + int64(s+consumed), true, nil
+		case frame.FrameTruncated:
+			if b+n >= d.streamEnd {
+				return 0, 0, false, nil // truncated at the true EOF: no complete frame
+			}
+			window *= 2 // grow and retry from the same base
+		default: // FrameNotFound
+			if b+n >= d.streamEnd {
+				return 0, 0, false, nil
+			}
+			b += n - 1 // advance, overlapping 1 byte for a sync straddling the boundary
+		}
+	}
+	return 0, 0, false, nil
+}
+
+// land seeks to landStart, decodes the containing frame, and drops (target-fs) leading
+// inter-channel samples. It returns the sample index actually positioned at.
+func (d *Decoder) land(landStart, target, fs int64) (int64, error) {
+	if _, err := d.rs.Seek(landStart, io.SeekStart); err != nil {
+		return 0, err
+	}
+	d.br = bitio.NewReaderAt(d.rs, landStart)
+	d.seeked = true
+	d.done = false
+	d.err = nil
+	if err := frame.Decode(d.br, d.info, &d.frame); err != nil {
+		return 0, err
+	}
+	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
+	if target < fs {
+		target = fs // overshoot clamp: land at the frame start
+	}
+	drop := (target - fs) * int64(len(d.frame.Channels)) * int64(d.bytesPS)
+	d.pending = d.buf[drop:]
+	return target, nil
+}
+
+// seekToEnd positions the decoder at end-of-stream so the next read is io.EOF, and
+// returns total (the stream's sample count).
+func (d *Decoder) seekToEnd(total int64) (int64, error) {
+	d.seeked = true
+	d.done = true
+	d.pending = nil
+	d.err = nil
+	return total, nil
+}
+
+// narrowBySeekTable tightens [lo, hi] using the bracketing SEEKTABLE points (M4b fills
+// d.seekPoints; in M4a it is empty and this is never called).
+func (d *Decoder) narrowBySeekTable(target, lo, hi int64) (newLo, newHi int64) {
+	newLo, newHi = lo, hi
+	for _, p := range d.seekPoints {
+		off := d.audioStart + int64(p.ByteOffset)
+		if int64(p.SampleNumber) <= target && off > newLo {
+			newLo = off
+		}
+		if int64(p.SampleNumber) > target && off < newHi {
+			newHi = off
+		}
+	}
+	return newLo, newHi
 }
 
 // decodeNextFrame decodes one frame, packs its PCM into d.buf, and feeds MD5.

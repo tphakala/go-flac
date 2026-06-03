@@ -106,15 +106,45 @@ func TestSeekToSampleUnsupported(t *testing.T) {
 	}
 }
 
-func TestSeekToSampleSeekableNotImplemented(t *testing.T) {
-	// A *bytes.Reader is an io.Seeker, so M2 reports the not-implemented sentinel
-	// (real seeking lands in M4) rather than ErrSeekUnsupported.
-	d, err := NewDecoder(bytes.NewReader(minimalStream(t)))
+func TestSeekSmoke(t *testing.T) {
+	data, samples := encodeRamp(t, 2, 16, 5*4096+123) // several frames + short final
+	dec, err := NewDecoder(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.SeekToSample(0); !errors.Is(err, flac.ErrNotImplemented) {
-		t.Fatalf("seekable source: want ErrNotImplemented, got %v", err)
+	got, err := dec.SeekToSample(10000)
+	if err != nil {
+		t.Fatalf("seek err = %v", err)
+	}
+	if got != 10000 {
+		t.Fatalf("seek returned %d, want 10000", got)
+	}
+	// Read the first inter-channel sample after the seek; channel 0 value must equal 10000.
+	bytesPS := 2
+	buf := make([]byte, 2*bytesPS) // one inter-channel sample (2 channels)
+	if _, err := io.ReadFull(dec, buf); err != nil {
+		t.Fatal(err)
+	}
+	v := int32(int16(uint16(buf[0]) | uint16(buf[1])<<8))
+	if v != 10000 {
+		t.Fatalf("sample at seek target = %d, want 10000", v)
+	}
+	_ = samples
+}
+
+func TestSeekUnsupportedAndInvalid(t *testing.T) {
+	data, _ := encodeRamp(t, 1, 16, 4096)
+	// Non-seekable source: wrap the bytes.Reader so it is only an io.Reader.
+	dec, err := NewDecoder(readerOnly{bytes.NewReader(data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.SeekToSample(10); !errors.Is(err, flac.ErrSeekUnsupported) {
+		t.Fatalf("err = %v, want ErrSeekUnsupported", err)
+	}
+	dec2, _ := NewDecoder(bytes.NewReader(data))
+	if _, err := dec2.SeekToSample(-1); !errors.Is(err, flac.ErrInvalidSeek) {
+		t.Fatalf("err = %v, want ErrInvalidSeek", err)
 	}
 }
 
