@@ -16,4 +16,14 @@ type Config struct {
 	// levels 3-8 improve automatically with no API change. Out-of-range values are
 	// clamped to 0-8.
 	CompressionLevel int
+
+	// SeekTableInterval, when > 0, makes the encoder emit a SEEKTABLE with one seek
+	// point roughly every SeekTableInterval inter-channel samples (plus a point at
+	// sample 0). It requires the sink to be an io.WriteSeeker. Zero (the default)
+	// emits no SEEKTABLE.
+	SeekTableInterval int
+	// SeekTableMaxPoints caps the reserved placeholder size; zero selects a default.
+	// A stream longer than SeekTableMaxPoints*SeekTableInterval samples leaves its
+	// tail without seek points (still seekable via binary search).
+	SeekTableMaxPoints int
 }

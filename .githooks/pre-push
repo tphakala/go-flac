@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 
-echo "Running pre-push checks (race tests)..."
-go test -race ./...
+# Fast pre-push sanity gate: build and vet only. The full race test suite, fuzz
+# seeds, and libFLAC cross-validation run in CI (.github/workflows/ci.yml) across
+# Linux, macOS, and Windows, and `task check` runs them locally before a release.
+# Running `go test -race ./...` on every push took minutes (the pcm package race
+# build dominates) and made an ordinary push look like a hang, so it is delegated
+# to CI rather than gating each push.
+echo "Running pre-push checks (build + vet)..."
+go build ./...
+go vet ./...
 echo "All pre-push checks passed!"

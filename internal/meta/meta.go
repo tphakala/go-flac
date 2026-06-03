@@ -9,64 +9,75 @@ import (
 	"github.com/tphakala/go-flac/internal/bitio"
 )
 
-// Metadata block types (FLAC spec).
+// Metadata block types (FLAC spec). TypePadding and TypeSeekTable are exported so the
+// pcm encoder can reference them when laying out the reserved metadata region.
 const (
 	typeStreamInfo = 0
-	// 1 PADDING, 2 APPLICATION, 3 SEEKTABLE, 4 VORBIS_COMMENT, 5 CUESHEET,
-	// 6 PICTURE are recognized and skipped by length; 127 is invalid.
+	// TypePadding is the PADDING metadata block type.
+	TypePadding = 1
+	// TypeSeekTable is the SEEKTABLE metadata block type.
+	TypeSeekTable = 3
+	// 2 APPLICATION, 4 VORBIS_COMMENT, 5 CUESHEET, 6 PICTURE are recognized and
+	// skipped by length; 127 is invalid.
 	typeInvalid = 127
 )
 
 // ReadMetadata reads the stream marker (skipping a leading ID3v2 tag if present)
 // and all metadata blocks, returning the STREAMINFO-derived properties. It leaves
 // the reader positioned at the first audio frame.
-func ReadMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
-	si, err := readMetadata(br)
+func ReadMetadata(br *bitio.Reader) (StreamMeta, error) {
+	sm, err := readMetadata(br)
 	if errors.Is(err, io.EOF) {
-		// Metadata always precedes the audio frames, so any EOF in this section
-		// is a truncated stream, not a clean end.
-		err = io.ErrUnexpectedEOF
+		err = io.ErrUnexpectedEOF // metadata precedes audio; any EOF here is truncation
 	}
-	return si, err
+	return sm, err
 }
 
-func readMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
+func readMetadata(br *bitio.Reader) (StreamMeta, error) {
 	if err := skipID3v2AndMagic(br); err != nil {
-		return flac.StreamInfo{}, err
+		return StreamMeta{}, err
 	}
-
-	var si flac.StreamInfo
+	var sm StreamMeta
 	haveStreamInfo := false
 	first := true
 	for {
 		last, btype, length, err := readBlockHeader(br)
 		if err != nil {
-			return flac.StreamInfo{}, err
+			return StreamMeta{}, err
 		}
 		if btype == typeInvalid {
-			return flac.StreamInfo{}, fmt.Errorf("meta: invalid block type 127: %w", flac.ErrUnsupported)
+			return StreamMeta{}, fmt.Errorf("meta: invalid block type 127: %w", flac.ErrUnsupported)
 		}
-		// STREAMINFO must be the first metadata block; fail fast if it is not.
 		if first && btype != typeStreamInfo {
-			return flac.StreamInfo{}, flac.ErrMissingStreamInfo
+			return StreamMeta{}, flac.ErrMissingStreamInfo
 		}
 		switch btype {
 		case typeStreamInfo:
 			if !first {
-				// A second STREAMINFO block is malformed.
-				return flac.StreamInfo{}, flac.ErrMissingStreamInfo
+				return StreamMeta{}, flac.ErrMissingStreamInfo
 			}
 			if length != 34 {
-				return flac.StreamInfo{}, fmt.Errorf("meta: STREAMINFO length %d != 34: %w", length, flac.ErrUnsupported)
+				return StreamMeta{}, fmt.Errorf("meta: STREAMINFO length %d != 34: %w", length, flac.ErrUnsupported)
 			}
-			si, err = readStreamInfo(br)
+			si, mnb, mxb, mxf, err := readStreamInfo(br)
 			if err != nil {
-				return flac.StreamInfo{}, err
+				return StreamMeta{}, err
 			}
+			sm.Info, sm.MinBlock, sm.MaxBlock, sm.MaxFrame = si, mnb, mxb, mxf
 			haveStreamInfo = true
+		case TypeSeekTable:
+			body, err := readBytes(br, int(length))
+			if err != nil {
+				return StreamMeta{}, err
+			}
+			pts, err := parseSeekTable(body)
+			if err != nil {
+				return StreamMeta{}, err
+			}
+			sm.SeekPoints = pts
 		default:
 			if err := skipBytes(br, int(length)); err != nil {
-				return flac.StreamInfo{}, err
+				return StreamMeta{}, err
 			}
 		}
 		first = false
@@ -75,9 +86,9 @@ func readMetadata(br *bitio.Reader) (flac.StreamInfo, error) {
 		}
 	}
 	if !haveStreamInfo {
-		return flac.StreamInfo{}, flac.ErrMissingStreamInfo
+		return StreamMeta{}, flac.ErrMissingStreamInfo
 	}
-	return si, nil
+	return sm, nil
 }
 
 // readBlockHeader reads the 4-byte metadata block header.

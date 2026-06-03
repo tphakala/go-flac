@@ -13,11 +13,12 @@ import (
 // Frame holds one decoded FLAC frame. Channels and the decorrelation scratch
 // buffers are reused across Decode calls.
 type Frame struct {
-	BlockSize     int
-	SampleRate    int
-	BitsPerSample int
-	Channels      [][]int32 // len == number of channels; each len == BlockSize
-	Number        uint64    // sample number (variable blocksize) or frame number (fixed)
+	BlockSize         int
+	SampleRate        int
+	BitsPerSample     int
+	Channels          [][]int32 // len == number of channels; each len == BlockSize
+	Number            uint64    // sample number (variable blocksize) or frame number (fixed)
+	VariableBlockSize bool      // true => Number is a sample number; false => a frame number
 
 	work32 [2][]int32 // reusable stereo-decorrelation scratch (common path)
 	work64 [2][]int64 // reusable scratch for the wide (25-32 bps) int64 decode path
@@ -115,6 +116,7 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	dst.SampleRate = hdr.sampleRate
 	dst.BitsPerSample = hdr.bitsPerSample
 	dst.Number = hdr.number
+	dst.VariableBlockSize = hdr.variableBlockSize
 	return nil
 }
 

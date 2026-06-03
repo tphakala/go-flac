@@ -24,6 +24,12 @@ var (
 	ErrUnsupported = errors.New("go-flac: unsupported or reserved bitstream value")
 	// ErrEncoderClosed is returned by Encoder.Write after Close has been called.
 	ErrEncoderClosed = errors.New("go-flac: encoder is closed")
+	// ErrTruncatedStream means the stream ended before delivering the sample count
+	// STREAMINFO declares (an inter-frame cut on a zero-MD5 stream), or a frame body
+	// was cut short. Mid-frame truncation wraps io.ErrUnexpectedEOF.
+	ErrTruncatedStream = errors.New("go-flac: truncated stream")
+	// ErrInvalidSeek means SeekToSample was called with a negative sample index.
+	ErrInvalidSeek = errors.New("go-flac: invalid seek (negative sample index)")
 )
 
 // StreamInfo describes a FLAC stream's global properties, mirroring the

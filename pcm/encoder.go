@@ -15,6 +15,10 @@ import (
 
 const encoderBlockSize = 4096
 
+// defaultSeekMaxPoints sizes the reserved SEEKTABLE when SeekTableMaxPoints is 0.
+// 4096 points is 4096*18 = 72 KiB, ample for typical files at one point per second.
+const defaultSeekMaxPoints = 4096
+
 // Encoder encodes interleaved little-endian PCM written to it into a FLAC stream.
 // It implements io.WriteCloser; Close flushes the final frame and finalizes the
 // STREAMINFO MD5, total samples, and min/max sizes (the last only when the sink is
@@ -40,6 +44,13 @@ type Encoder struct {
 	wrote              bool
 	minBlock, maxBlock int
 	minFrame, maxFrame int
+
+	seekInterval  int   // samples between seek points (0 disables)
+	seekMaxPoints int   // reserved placeholder point count
+	seekBodyOff   int64 // absolute byte offset of the SEEKTABLE body
+	audioBytes    int64 // audio bytes written so far (= next frame's byte offset)
+	points        []meta.SeekPoint
+	nextBoundary  int64 // next sample boundary at which to record a point
 
 	closed bool
 }
@@ -80,9 +91,47 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		e.ws = ws
 	}
 
-	body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders
-	if err := meta.WriteStreamHeader(w, body); err != nil {
-		return nil, err
+	if cfg.SeekTableInterval > 0 {
+		if e.ws == nil {
+			return nil, errors.New("go-flac/pcm: NewEncoder: SeekTableInterval requires an io.WriteSeeker sink")
+		}
+		e.seekInterval = cfg.SeekTableInterval
+		e.seekMaxPoints = cfg.SeekTableMaxPoints
+		if e.seekMaxPoints <= 0 {
+			e.seekMaxPoints = defaultSeekMaxPoints
+		}
+		// A metadata block length is 24 bits, so the SEEKTABLE body (seekMaxPoints points
+		// of SeekPointBytes each) must fit; clamp to the limit rather than silently
+		// truncating the length into a corrupt header.
+		if maxPoints := (1<<24 - 1) / meta.SeekPointBytes; e.seekMaxPoints > maxPoints {
+			e.seekMaxPoints = maxPoints
+		}
+		// Reserve the points slice up front (only when a seek table was requested) so a
+		// long encode does not repeatedly grow it; it never exceeds seekMaxPoints.
+		e.points = make([]meta.SeekPoint, 0, e.seekMaxPoints)
+		e.nextBoundary = int64(e.seekInterval)
+		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
+		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
+			return nil, err
+		}
+		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
+		if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, len(stBody))); err != nil {
+			return nil, err
+		}
+		// SEEKTABLE body offset = "fLaC" + STREAMINFO header (StreamInfoBodyOffset) +
+		// STREAMINFO body + SEEKTABLE header (4).
+		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + 4)
+		if _, err := w.Write(stBody); err != nil {
+			return nil, err
+		}
+		if _, err := w.Write(meta.EncodeBlockHeader(true, meta.TypePadding, 0)); err != nil { // last=1
+			return nil, err
+		}
+	} else {
+		body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders, last=1
+		if err := meta.WriteStreamHeader(w, body); err != nil {
+			return nil, err
+		}
 	}
 	return e, nil
 }
@@ -136,7 +185,9 @@ func (e *Encoder) Write(p []byte) (int, error) {
 }
 
 // emitBlock feeds chunk (exactly n inter-channel samples) into MD5, deinterleaves
-// it, and writes one frame.
+// it, and writes one frame. When seek-table recording is active, a seek point is
+// appended for the first frame (frameOffset == 0) and for each frame whose first
+// sample meets or crosses the next boundary.
 func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	e.md5.Write(chunk)
 	for c := range e.ch {
@@ -144,10 +195,28 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	}
 	deinterleaveSamples(e.ch, chunk, n, e.cfg.Channels, e.bytesPS)
 
+	frameOffset := e.audioBytes // byte offset of this frame from the first frame
+	firstSample := e.total      // first inter-channel sample of this block
+
 	buf := frame.EncodeFrame(e.bw, e.params, e.si, e.ch, e.frameNum)
 	if _, err := e.w.Write(buf); err != nil {
 		return err
 	}
+	if e.seekInterval > 0 && len(e.points) < e.seekMaxPoints {
+		if frameOffset == 0 || int64(firstSample) >= e.nextBoundary {
+			e.points = append(e.points, meta.SeekPoint{
+				SampleNumber: firstSample,
+				ByteOffset:   uint64(frameOffset),
+				FrameSamples: uint16(n),
+			})
+			if int64(firstSample) >= e.nextBoundary { // skip boundaries this block passed
+				steps := (int64(firstSample)-e.nextBoundary)/int64(e.seekInterval) + 1
+				e.nextBoundary += steps * int64(e.seekInterval)
+			}
+		}
+	}
+	e.audioBytes += int64(len(buf))
+
 	e.frameNum++
 	e.total += uint64(n)
 	sz := len(buf)
@@ -198,6 +267,36 @@ func (e *Encoder) Close() error {
 	if _, err := e.ws.Write(body); err != nil {
 		return fmt.Errorf("go-flac/pcm: Close: patch STREAMINFO: %w", err)
 	}
+
+	if e.seekInterval > 0 {
+		used := len(e.points)
+		if _, err := e.ws.Seek(e.seekBodyOff, io.SeekStart); err != nil {
+			return fmt.Errorf("go-flac/pcm: Close: seek to SEEKTABLE: %w", err)
+		}
+		if _, err := e.ws.Write(meta.EncodeSeekPoints(e.points)); err != nil {
+			return fmt.Errorf("go-flac/pcm: Close: write seek points: %w", err)
+		}
+		if used < e.seekMaxPoints {
+			// Shrink the SEEKTABLE block to the used points and grow PADDING to keep
+			// the audio offset fixed (spec section 4.4).
+			if _, err := e.ws.Seek(e.seekBodyOff-4, io.SeekStart); err != nil {
+				return fmt.Errorf("go-flac/pcm: Close: seek to SEEKTABLE header: %w", err)
+			}
+			if _, err := e.ws.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, used*meta.SeekPointBytes)); err != nil {
+				return fmt.Errorf("go-flac/pcm: Close: shrink SEEKTABLE: %w", err)
+			}
+			if _, err := e.ws.Seek(e.seekBodyOff+int64(used*meta.SeekPointBytes), io.SeekStart); err != nil {
+				return fmt.Errorf("go-flac/pcm: Close: seek to PADDING: %w", err)
+			}
+			padLen := (e.seekMaxPoints - used) * meta.SeekPointBytes // (N-used)*18, exact (spec section 4.4)
+			if _, err := e.ws.Write(meta.EncodeBlockHeader(true, meta.TypePadding, padLen)); err != nil {
+				return fmt.Errorf("go-flac/pcm: Close: write PADDING header: %w", err)
+			}
+		}
+		// used == seekMaxPoints: the full SEEKTABLE (last=0) + the pre-written empty
+		// PADDING (last=1) are already correct; only the points needed patching.
+	}
+
 	if _, err := e.ws.Seek(0, io.SeekEnd); err != nil {
 		return fmt.Errorf("go-flac/pcm: Close: seek to end: %w", err)
 	}

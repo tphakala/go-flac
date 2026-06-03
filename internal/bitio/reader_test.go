@@ -113,3 +113,38 @@ func TestSkipToByteBoundary(t *testing.T) {
 		t.Fatalf("tap=%x want ff0f", tapped)
 	}
 }
+
+func TestReaderBytesRead(t *testing.T) {
+	r := NewReader(bytes.NewReader([]byte{0xAB, 0xCD, 0xEF, 0x12}))
+	if got := r.BytesRead(); got != 0 {
+		t.Fatalf("BytesRead before any read = %d, want 0", got)
+	}
+	if _, err := r.ReadBits(8); err != nil { // consume one whole byte
+		t.Fatal(err)
+	}
+	if got := r.BytesRead(); got != 1 {
+		t.Fatalf("BytesRead after 8 bits = %d, want 1", got)
+	}
+	if _, err := r.ReadBits(16); err != nil { // two more whole bytes
+		t.Fatal(err)
+	}
+	if !r.ByteAligned() {
+		t.Fatal("expected byte aligned")
+	}
+	if got := r.BytesRead(); got != 3 {
+		t.Fatalf("BytesRead after 24 bits = %d, want 3", got)
+	}
+}
+
+func TestNewReaderAtSeedsCounter(t *testing.T) {
+	r := NewReaderAt(bytes.NewReader([]byte{0x55, 0x66}), 100)
+	if got := r.BytesRead(); got != 100 {
+		t.Fatalf("seeded BytesRead = %d, want 100", got)
+	}
+	if _, err := r.ReadBits(8); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.BytesRead(); got != 101 {
+		t.Fatalf("BytesRead after one byte = %d, want 101", got)
+	}
+}

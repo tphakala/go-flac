@@ -34,19 +34,29 @@ func EncodeStreamInfo(si flac.StreamInfo, minBlock, maxBlock, minFrame, maxFrame
 	return bw.Bytes()
 }
 
+// WriteStreamHeaderEx writes the "fLaC" marker and the STREAMINFO block header (with
+// the given last-block flag) followed by body. WriteStreamHeader is the last=true case.
+func WriteStreamHeaderEx(w io.Writer, body []byte, last bool) error {
+	out := make([]byte, 0, 4+4+len(body))
+	out = append(out, 'f', 'L', 'a', 'C')
+	out = append(out, EncodeBlockHeader(last, typeStreamInfo, len(body))...)
+	out = append(out, body...)
+	_, err := w.Write(out)
+	return err
+}
+
 // WriteStreamHeader writes the "fLaC" marker followed by a STREAMINFO metadata
 // block (last-block flag set) carrying body.
 func WriteStreamHeader(w io.Writer, body []byte) error {
-	hdr := make([]byte, 0, StreamInfoBodyOffset+len(body))
-	// "fLaC" marker, then the 4-byte metadata block header: last-block flag (1) |
-	// 7-bit block type, then a 24-bit big-endian body length.
-	hdr = append(hdr, 'f', 'L', 'a', 'C',
-		0x80|byte(typeStreamInfo),
-		byte(len(body)>>16),
-		byte(len(body)>>8),
-		byte(len(body)),
-	)
-	hdr = append(hdr, body...)
-	_, err := w.Write(hdr)
-	return err
+	return WriteStreamHeaderEx(w, body, true)
+}
+
+// SeekTablePlaceholder returns a SEEKTABLE body of n placeholder points (all
+// PlaceholderSampleNumber), 18*n bytes.
+func SeekTablePlaceholder(n int) []byte {
+	pts := make([]SeekPoint, n)
+	for i := range pts {
+		pts[i] = SeekPoint{SampleNumber: PlaceholderSampleNumber}
+	}
+	return EncodeSeekPoints(pts)
 }
