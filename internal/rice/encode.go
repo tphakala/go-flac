@@ -91,11 +91,14 @@ func riceBits(zz []uint64, k int) int64 {
 	// value but proves the shift count is < 64 to the compiler, which then drops
 	// the oversized-shift guard (CMP/SBB/AND) from this per-residual hot loop.
 	shift := uint(k) & 63
-	var total int64
+	// Each residual costs (u>>k) quotient bits + 1 stop bit + k remainder bits. The
+	// constant per-residual term (1 + k) is summed once at the end rather than every
+	// iteration, leaving just a shift-and-add in the hot loop.
+	var quotients int64
 	for _, u := range zz {
-		total += int64(u>>shift) + 1 + int64(k)
+		quotients += int64(u >> shift)
 	}
-	return total
+	return quotients + int64(len(zz))*(1+int64(k))
 }
 
 // EncodeResidual writes the partitioned Rice residual for res (the blockSize-
