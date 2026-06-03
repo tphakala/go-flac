@@ -87,9 +87,13 @@ func bestParam(zz []uint64) (k int, bitCount int64) {
 // small k) cannot overflow on a 32-bit build, where a wrapped count would make
 // bestParam choose a non-optimal parameter.
 func riceBits(zz []uint64, k int) int64 {
+	// k is a Rice parameter in [0, maxParam5]; the & 63 mask is a no-op on its
+	// value but proves the shift count is < 64 to the compiler, which then drops
+	// the oversized-shift guard (CMP/SBB/AND) from this per-residual hot loop.
+	shift := uint(k) & 63
 	var total int64
 	for _, u := range zz {
-		total += int64(u>>uint(k)) + 1 + int64(k)
+		total += int64(u>>shift) + 1 + int64(k)
 	}
 	return total
 }
