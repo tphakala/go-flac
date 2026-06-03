@@ -167,6 +167,50 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 	return qcoeff, shift, true
 }
 
+// AnalyzeLPC runs the full LPC analysis on samples (already wasted-bits shifted)
+// using the supplied apodization window (len(window) must equal len(samples)).
+// maxOrder is the highest order to consider, precision the coefficient bit
+// width, and eff the warmup/sample bit width used in the order-cost estimate.
+// It returns the chosen order with its quantized coefficients and shift, or
+// ok=false when LPC is not applicable (block too short, windowed silence,
+// degenerate analysis). The returned coefficients always satisfy the decoder's
+// constraints (non-negative shift, coeffs fit the precision range).
+func AnalyzeLPC(samples []int32, window []float64, maxOrder, precision, eff int) (order, shift int, qcoeff []int32, ok bool) {
+	n := len(samples)
+	mo := maxOrder
+	if mo > n-1 {
+		mo = n - 1
+	}
+	if mo > 32 {
+		mo = 32
+	}
+	if mo < 1 {
+		return 0, 0, nil, false
+	}
+
+	windowed := make([]float64, n)
+	for i := range windowed {
+		windowed[i] = float64(samples[i]) * window[i]
+	}
+
+	autoc := autocorrelate(windowed, mo)
+	if autoc[0] == 0 {
+		return 0, 0, nil, false
+	}
+
+	lpcByOrder, errByOrder, maxComputed := levinson(autoc, mo)
+	if maxComputed < 1 {
+		return 0, 0, nil, false
+	}
+
+	best := estimateBestOrder(errByOrder, maxComputed, n, eff+precision)
+	qc, sh, qok := quantizeCoefficients(lpcByOrder[best], precision)
+	if !qok {
+		return 0, 0, nil, false
+	}
+	return best, sh, qc, true
+}
+
 // estimateBestOrder picks the LPC order in 1..maxComputed that minimizes the
 // estimated total subframe bits: an estimated bits-per-residual-sample derived
 // from the prediction error, times the residual count, plus a per-order header

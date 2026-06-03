@@ -189,3 +189,85 @@ func TestEstimateBestOrderPerfectPrediction(t *testing.T) {
 		t.Fatalf("order = %d, want 2 (first perfect order)", got)
 	}
 }
+
+// arSignal generates a deterministic 2nd-order autoregressive int32 signal that
+// LPC should model well.
+func arSignal(n int) []int32 {
+	out := make([]int32, n)
+	var p1, p2 float64
+	var state uint32 = 0x2468ace0
+	for i := range out {
+		state = state*1664525 + 1013904223
+		noise := (float64(int32(state>>9)%2001) - 1000) * 0.5
+		v := 1.4*p1 - 0.6*p2 + noise
+		out[i] = int32(math.Round(v))
+		p2 = p1
+		p1 = v
+	}
+	return out
+}
+
+func TestAnalyzeLPCModelsCorrelatedSignal(t *testing.T) {
+	src := arSignal(4096)
+	window := TukeyWindow(len(src), 0.5)
+
+	order, shift, qc, ok := AnalyzeLPC(src, window, 12, 15, 16)
+	if !ok {
+		t.Fatal("ok = false, want true for a correlated signal")
+	}
+	if order < 1 || order > 12 {
+		t.Fatalf("order = %d out of [1,12]", order)
+	}
+	if shift < 0 || shift > maxQLPShift {
+		t.Fatalf("shift = %d out of range", shift)
+	}
+	if len(qc) != order {
+		t.Fatalf("len(qc) = %d, want %d", len(qc), order)
+	}
+
+	// Residuals must invert RestoreLPC exactly (the correctness anchor).
+	res := make([]int32, len(src)-order)
+	ComputeLPCResiduals(res, src, qc, shift, order)
+	dst := make([]int32, len(src))
+	copy(dst[:order], src[:order])
+	copy(dst[order:], res)
+	RestoreLPC(dst, qc, shift, order)
+	for i := range src {
+		if dst[i] != src[i] {
+			t.Fatalf("round-trip mismatch at %d: %d vs %d", i, dst[i], src[i])
+		}
+	}
+
+	// The predictor must beat order-0 (raw) coding: sum|res| < sum|src-mean|-ish.
+	var sumRes, sumRaw int64
+	for _, r := range res {
+		sumRes += abs64(int64(r))
+	}
+	for i := 1; i < len(src); i++ {
+		sumRaw += abs64(int64(src[i]) - int64(src[i-1]))
+	}
+	if sumRes >= sumRaw {
+		t.Fatalf("LPC did not improve over first-difference: sumRes=%d sumRaw=%d", sumRes, sumRaw)
+	}
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func TestAnalyzeLPCShortBlock(t *testing.T) {
+	if _, _, _, ok := AnalyzeLPC([]int32{5}, []float64{1}, 8, 15, 16); ok {
+		t.Fatal("ok=true for 1-sample block, want false")
+	}
+}
+
+func TestAnalyzeLPCSilence(t *testing.T) {
+	src := make([]int32, 256) // all zero -> autoc[0] == 0
+	window := TukeyWindow(len(src), 0.5)
+	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16); ok {
+		t.Fatal("ok=true for silence, want false")
+	}
+}
