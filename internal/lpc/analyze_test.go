@@ -96,3 +96,62 @@ func TestLevinsonStopsOnNonPositiveError(t *testing.T) {
 		t.Fatalf("maxComputed = %d out of range", maxComputed)
 	}
 }
+
+func TestQuantizeCoefficientsBasic(t *testing.T) {
+	qc, shift, ok := quantizeCoefficients([]float64{0.5, 0}, 15)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if shift < 0 || shift > maxQLPShift {
+		t.Fatalf("shift = %d out of [0,%d]", shift, maxQLPShift)
+	}
+	// 0.5 with precision 15: frexp(0.5) exp=0, shift=14, qc0 = round(0.5*2^14)=8192.
+	if shift != 14 || qc[0] != 8192 || qc[1] != 0 {
+		t.Fatalf("qc=%v shift=%d, want qc=[8192 0] shift=14", qc, shift)
+	}
+}
+
+func TestQuantizeCoefficientsRanges(t *testing.T) {
+	const precision = 15
+	qmax := int32(1)<<(precision-1) - 1    // 16383
+	qmin := -(int32(1) << (precision - 1)) // -16384
+
+	cases := [][]float64{
+		{0.5, -0.25, 0.125},
+		{0.0001},   // tiny -> shift clamps to maxQLPShift
+		{20000.0},  // huge -> shift clamps to 0, coeff clamps to qmax
+		{-20000.0}, // huge negative -> coeff clamps to qmin
+		{1.234, -2.5, 3.75, -0.1},
+	}
+	for _, lpc := range cases {
+		qc, shift, ok := quantizeCoefficients(lpc, precision)
+		if !ok {
+			t.Fatalf("ok=false for %v", lpc)
+		}
+		if shift < 0 || shift > maxQLPShift {
+			t.Fatalf("shift %d out of range for %v", shift, lpc)
+		}
+		for i, q := range qc {
+			if q < qmin || q > qmax {
+				t.Fatalf("qc[%d]=%d out of [%d,%d] for %v", i, q, qmin, qmax, lpc)
+			}
+		}
+	}
+
+	// Explicit clamp checks.
+	if qc, shift, _ := quantizeCoefficients([]float64{0.0001}, precision); shift != maxQLPShift {
+		t.Fatalf("tiny coeff: shift=%d, want %d (qc=%v)", shift, maxQLPShift, qc)
+	}
+	if qc, shift, _ := quantizeCoefficients([]float64{20000.0}, precision); shift != 0 || qc[0] != qmax {
+		t.Fatalf("huge coeff: shift=%d qc0=%d, want shift 0 qc0 %d", shift, qc[0], qmax)
+	}
+	if qc, _, _ := quantizeCoefficients([]float64{-20000.0}, precision); qc[0] != qmin {
+		t.Fatalf("huge negative coeff: qc0=%d, want %d", qc[0], qmin)
+	}
+}
+
+func TestQuantizeCoefficientsRejectsZero(t *testing.T) {
+	if _, _, ok := quantizeCoefficients([]float64{0, 0}, 15); ok {
+		t.Fatal("ok=true for all-zero coeffs, want false")
+	}
+}

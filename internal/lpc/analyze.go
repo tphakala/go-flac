@@ -113,3 +113,56 @@ func levinson(autoc []float64, maxOrder int) (lpcByOrder [][]float64, errByOrder
 	}
 	return lpcByOrder, errByOrder, maxOrder
 }
+
+// quantizeCoefficients converts float predictor coefficients to int32 with a
+// non-negative shift at the given precision (in bits), using error-feedback
+// rounding. The shift is chosen so the largest-magnitude coefficient fills the
+// precision range, then clamped to [0, maxQLPShift]; coefficients are clamped
+// to [-2^(precision-1), 2^(precision-1)-1]. Returns ok=false when the
+// coefficients carry no usable predictor (all zero, NaN, or Inf).
+func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift int, ok bool) {
+	cmax := 0.0
+	for _, c := range lpc {
+		if math.IsNaN(c) || math.IsInf(c, 0) {
+			return nil, 0, false
+		}
+		if a := math.Abs(c); a > cmax {
+			cmax = a
+		}
+	}
+	if cmax <= 0 {
+		return nil, 0, false
+	}
+
+	// cmax = frac * 2^exp with frac in [0.5, 1). Scaling by 2^(precision-1-exp)
+	// puts the largest coefficient at ~2^(precision-1).
+	_, exp := math.Frexp(cmax)
+	shift = precision - 1 - exp
+	if shift > maxQLPShift {
+		shift = maxQLPShift
+	}
+	if shift < 0 {
+		// Coefficients too large for a non-negative shift; the decoder rejects
+		// negative shift, so clamp to 0 and let the coeff clamp below handle it.
+		shift = 0
+	}
+
+	qmax := int32(1)<<(precision-1) - 1
+	qmin := -(int32(1) << (precision - 1))
+	scale := math.Ldexp(1, shift) // 2^shift
+
+	qcoeff = make([]int32, len(lpc))
+	var errAcc float64
+	for i, c := range lpc {
+		errAcc += c * scale
+		q := math.Round(errAcc)
+		if q > float64(qmax) {
+			q = float64(qmax)
+		} else if q < float64(qmin) {
+			q = float64(qmin)
+		}
+		errAcc -= q
+		qcoeff[i] = int32(q)
+	}
+	return qcoeff, shift, true
+}
