@@ -1,6 +1,11 @@
 package frame
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+
+	"github.com/tphakala/go-flac/internal/bitio"
+)
 
 // paramsLevel returns frame.Params for a compression level, mirroring the encoder's
 // paramsForLevel table (pcm/encoder.go). Used by the wide-depth subframe/frame tests.
@@ -58,3 +63,32 @@ func TestChooseFixedOrder64Runs(t *testing.T) {
 		t.Fatalf("chooseFixedOrder64 = (%d,%d)", o, bitsCost)
 	}
 }
+
+// A wide subframe written by writeSubframe64 must decode back exactly via the existing
+// generic decodeSubframe64.
+func TestWriteSubframe64RoundTrip(t *testing.T) {
+	for _, bps := range []int{25, 28, 32, 33} { // 33 = side-channel width at 32 bps
+		s := wideSamples(1024, bps, int64(bps))
+		p := paramsLevel(t, 8)
+		win := apodizationWindow(p, len(s))
+		plan := planSubframe64(s, bps, p, win)
+
+		bw := bitio.NewWriter()
+		bw.Reset()
+		writeSubframe64(bw, s, bps, plan, p)
+		bw.AlignByte()
+
+		br := bitio.NewReader(bytesReaderFrame(bw.Bytes()))
+		dst := make([]int64, len(s))
+		if err := decodeSubframe64(br, dst, bps); err != nil {
+			t.Fatalf("bps %d decode: %v", bps, err)
+		}
+		for i := range s {
+			if dst[i] != s[i] {
+				t.Fatalf("bps %d sample[%d] = %d, want %d", bps, i, dst[i], s[i])
+			}
+		}
+	}
+}
+
+func bytesReaderFrame(b []byte) *bytes.Reader { return bytes.NewReader(b) }
