@@ -27,9 +27,26 @@ func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, f
 	bps := si.BitDepth
 	nch := len(ch)
 
-	if nch == 2 && p.Stereo != StereoIndependent && bps <= 24 {
+	switch {
+	case nch == 2 && p.Stereo != StereoIndependent && bps <= 24:
 		encodeStereo(bw, p, bps, bs, ch[0], ch[1], frameNum)
-	} else {
+	case nch == 2 && p.Stereo != StereoIndependent && bps >= 25:
+		encodeStereo64(bw, p, bps, bs, ch[0], ch[1], frameNum)
+	case bps >= 25:
+		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
+		// so upcast each channel to int64 before planning and writing.
+		window := apodizationWindow(p, bs)
+		writeFrameHeader(bw, bs, nch-1, frameNum)
+		buf := make([]int64, bs)
+		for c := range nch {
+			for i := range bs {
+				buf[i] = int64(ch[c][i])
+			}
+			plan := planSubframe64(buf, bps, p, window)
+			writeSubframe64(bw, buf, bps, plan, p)
+		}
+		finishFrame(bw)
+	default:
 		window := apodizationWindow(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		for c := range nch {
@@ -52,6 +69,8 @@ const (
 )
 
 // encodeStereo selects a channel assignment by estimated bits and writes it.
+//
+//nolint:dupl // intentional: typed parallel of encodeStereo64
 func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNum uint64) {
 	side := make([]int32, bs)
 	mid := make([]int32, bs)
@@ -114,4 +133,67 @@ func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNu
 func finishFrame(bw *bitio.Writer) {
 	bw.AlignByte()
 	bw.WriteBits(uint64(crc.Checksum16(bw.Bytes())), 16)
+}
+
+// encodeStereo64 is the int64 analogue of encodeStereo for 25-32 bps. The l/r inputs
+// arrive as int32 and are upcast to int64 before wide-domain decorrelation.
+//
+//nolint:dupl // intentional: typed parallel of encodeStereo
+func encodeStereo64(bw *bitio.Writer, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
+	l := make([]int64, bs)
+	r := make([]int64, bs)
+	side := make([]int64, bs)
+	mid := make([]int64, bs)
+	// Upcast and decorrelate in a single pass over the block.
+	for i := range bs {
+		li, ri := int64(l32[i]), int64(r32[i])
+		l[i], r[i] = li, ri
+		side[i] = li - ri
+		mid[i] = (li + ri) >> 1
+	}
+	window := apodizationWindow(p, bs)
+	planL := planSubframe64(l, bps, p, window)
+	planR := planSubframe64(r, bps, p, window)
+	planM := planSubframe64(mid, bps, p, window)
+	planS := planSubframe64(side, bps+1, p, window)
+
+	indep := planL.bits + planR.bits
+	ls := planL.bits + planS.bits
+	rs := planS.bits + planR.bits
+	ms := planM.bits + planS.bits
+
+	chCode := chIndependent2
+	minCost := indep
+	if p.Stereo == StereoAdaptive {
+		if ms < minCost {
+			chCode = chMidSide
+		}
+	} else { // StereoFull
+		if ls < minCost {
+			minCost, chCode = ls, chLeftSide
+		}
+		if rs < minCost {
+			minCost, chCode = rs, chRightSide
+		}
+		if ms < minCost {
+			chCode = chMidSide
+		}
+	}
+
+	writeFrameHeader(bw, bs, chCode, frameNum)
+	switch chCode {
+	case chLeftSide:
+		writeSubframe64(bw, l, bps, planL, p)
+		writeSubframe64(bw, side, bps+1, planS, p)
+	case chRightSide:
+		writeSubframe64(bw, side, bps+1, planS, p)
+		writeSubframe64(bw, r, bps, planR, p)
+	case chMidSide:
+		writeSubframe64(bw, mid, bps, planM, p)
+		writeSubframe64(bw, side, bps+1, planS, p)
+	default: // independent
+		writeSubframe64(bw, l, bps, planL, p)
+		writeSubframe64(bw, r, bps, planR, p)
+	}
+	finishFrame(bw)
 }

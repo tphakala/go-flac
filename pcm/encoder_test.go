@@ -280,7 +280,7 @@ func TestNewEncoderRejectsBadConfig(t *testing.T) {
 		{SampleRate: 0, BitDepth: 16, Channels: 2},
 		{SampleRate: 700000, BitDepth: 16, Channels: 2}, // above the FLAC 655350 max
 		{SampleRate: 44100, BitDepth: 3, Channels: 2},   // below 4
-		{SampleRate: 44100, BitDepth: 32, Channels: 2},  // above 24 (M3 scope)
+		{SampleRate: 44100, BitDepth: 33, Channels: 2},  // above 32 (FLAC max)
 		{SampleRate: 44100, BitDepth: 16, Channels: 0},
 		{SampleRate: 44100, BitDepth: 16, Channels: 9},
 	}
