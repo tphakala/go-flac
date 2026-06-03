@@ -3,6 +3,7 @@ package pcm
 import (
 	"crypto/md5"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 
@@ -17,16 +18,27 @@ import (
 // underlying source is an io.Seeker (implemented in M4).
 type Decoder struct {
 	br       *bitio.Reader
+	rs       io.ReadSeeker // non-nil when the source is seekable
 	info     flac.StreamInfo
 	seekable bool
 
-	frame   frame.Frame
-	buf     []byte // packed PCM backing buffer, reused across frames
-	pending []byte // unread window into buf, not yet returned by Read
-	bytesPS int    // bytes per sample = ceil(bps/8)
-	md5     hash.Hash
-	done    bool
-	err     error
+	audioStart   int64            // absolute byte offset of the first frame
+	streamEnd    int64            // absolute file size
+	nominalBlock int              // STREAMINFO max block size; fixed-blocksize nominal
+	maxFrame     int              // STREAMINFO max frame size (0 unknown), seek-probe sizing
+	seekPoints   []meta.SeekPoint // nil until M4b parsing (Task 8)
+
+	frame      frame.Frame
+	probeFrame frame.Frame // scratch for seek probes (Task 5)
+	probeBuf   []byte      // reusable seek-probe read buffer (Task 5)
+	buf        []byte      // packed PCM backing buffer, reused across frames
+	pending    []byte      // unread window into buf
+	bytesPS    int         // bytes per sample = ceil(bps/8)
+	md5        hash.Hash
+	decoded    uint64 // inter-channel samples decoded so far
+	seeked     bool   // a seek happened; disables MD5 + truncation checks
+	done       bool
+	err        error
 }
 
 var (
@@ -40,19 +52,45 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 	if r == nil {
 		return nil, errors.New("go-flac/pcm: NewDecoder: nil reader")
 	}
+	rs, seekable := r.(io.ReadSeeker)
+	var base int64
+	if seekable {
+		// Capture the absolute position where the FLAC stream begins, before any byte
+		// is consumed, so audioStart is absolute even if r was advanced past a header.
+		var err error
+		if base, err = rs.Seek(0, io.SeekCurrent); err != nil {
+			return nil, err
+		}
+	}
 	br := bitio.NewReader(r)
 	sm, err := meta.ReadMetadata(br)
 	if err != nil {
 		return nil, err
 	}
-	si := sm.Info
 	d := &Decoder{
 		br:      br,
-		info:    si,
-		bytesPS: (si.BitDepth + 7) / 8,
+		info:    sm.Info,
+		bytesPS: (sm.Info.BitDepth + 7) / 8,
 		md5:     md5.New(),
 	}
-	_, d.seekable = r.(io.Seeker)
+	if seekable {
+		d.rs = rs
+		d.seekable = true
+		d.audioStart = base + br.BytesRead()
+		resume, err := rs.Seek(0, io.SeekCurrent) // bufio-advanced absolute file pos
+		if err != nil {
+			return nil, err
+		}
+		if d.streamEnd, err = rs.Seek(0, io.SeekEnd); err != nil {
+			return nil, err
+		}
+		if _, err = rs.Seek(resume, io.SeekStart); err != nil { // restore; bufio buffer stays valid
+			return nil, err
+		}
+		d.nominalBlock = sm.MaxBlock
+		d.maxFrame = sm.MaxFrame
+		d.seekPoints = sm.SeekPoints
+	}
 	return d, nil
 }
 
@@ -81,29 +119,40 @@ func (d *Decoder) decodeNextFrame() error {
 	}
 	err := frame.Decode(d.br, d.info, &d.frame)
 	if err != nil {
-		// Only a clean io.EOF at a frame boundary ends the stream; a mid-frame
-		// io.ErrUnexpectedEOF is a truncation and propagates as a real error.
 		if errors.Is(err, io.EOF) {
-			return d.finish()
+			return d.finish() // clean end at a frame boundary
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			// Mid-frame cut: surface ErrTruncatedStream, keep io.ErrUnexpectedEOF in chain.
+			err = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, err)
 		}
 		d.err = err
 		return err
 	}
+	d.decoded += uint64(d.frame.BlockSize)
 	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
-	d.md5.Write(d.buf)
+	if !d.seeked {
+		d.md5.Write(d.buf) // MD5 is meaningless once frames have been skipped
+	}
 	d.pending = d.buf
 	return nil
 }
 
-// finish verifies the stream MD5 (if present) and marks the decoder done.
+// finish verifies the stream MD5 and sample count (when not seeked) and marks
+// the decoder done.
 func (d *Decoder) finish() error {
 	d.done = true
-	var zero [16]byte
-	if d.info.MD5 != zero {
-		var sum [16]byte
-		copy(sum[:], d.md5.Sum(nil))
-		if sum != d.info.MD5 {
-			d.err = flac.ErrMD5Mismatch
+	if !d.seeked {
+		var zero [16]byte
+		if d.info.MD5 != zero {
+			var sum [16]byte
+			copy(sum[:], d.md5.Sum(nil))
+			if sum != d.info.MD5 {
+				d.err = flac.ErrMD5Mismatch
+				return d.err
+			}
+		} else if d.info.TotalSamples != 0 && d.decoded < d.info.TotalSamples {
+			d.err = flac.ErrTruncatedStream // inter-frame cut on a zero-MD5 stream
 			return d.err
 		}
 	}
