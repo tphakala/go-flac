@@ -30,12 +30,12 @@ func TestStreamInfoWriteRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMetadata: %v", err)
 	}
-	if got.SampleRate != si.SampleRate || got.Channels != si.Channels ||
-		got.BitDepth != si.BitDepth || got.TotalSamples != si.TotalSamples {
-		t.Fatalf("got %+v, want %+v", got, si)
+	if got.Info.SampleRate != si.SampleRate || got.Info.Channels != si.Channels ||
+		got.Info.BitDepth != si.BitDepth || got.Info.TotalSamples != si.TotalSamples {
+		t.Fatalf("got %+v, want %+v", got.Info, si)
 	}
-	if got.MD5 != si.MD5 {
-		t.Fatalf("MD5 mismatch: got %x want %x", got.MD5, si.MD5)
+	if got.Info.MD5 != si.MD5 {
+		t.Fatalf("MD5 mismatch: got %x want %x", got.Info.MD5, si.MD5)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestStreamInfoUnknownSentinels(t *testing.T) {
 		t.Fatal(err)
 	}
 	var zero [16]byte
-	if got.MD5 != zero || got.TotalSamples != 0 {
-		t.Fatalf("expected unknown sentinels, got MD5=%x total=%d", got.MD5, got.TotalSamples)
+	if got.Info.MD5 != zero || got.Info.TotalSamples != 0 {
+		t.Fatalf("expected unknown sentinels, got MD5=%x total=%d", got.Info.MD5, got.Info.TotalSamples)
 	}
 }

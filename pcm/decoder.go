@@ -41,10 +41,11 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 		return nil, errors.New("go-flac/pcm: NewDecoder: nil reader")
 	}
 	br := bitio.NewReader(r)
-	si, err := meta.ReadMetadata(br)
+	sm, err := meta.ReadMetadata(br)
 	if err != nil {
 		return nil, err
 	}
+	si := sm.Info
 	d := &Decoder{
 		br:      br,
 		info:    si,
