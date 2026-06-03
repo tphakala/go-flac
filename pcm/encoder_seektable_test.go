@@ -40,3 +40,45 @@ func TestSeekTablePlaceholderWritten(t *testing.T) {
 	}
 	_ = flac.Version
 }
+
+func TestSeekTableFilledAndRepartitioned(t *testing.T) {
+	var sb seekBuffer
+	// interval = 4096 samples => a point at sample 0 and at each block boundary.
+	enc, err := NewEncoder(&sb, Config{
+		SampleRate: 44100, Channels: 2, BitDepth: 16,
+		SeekTableInterval: 4096, SeekTableMaxPoints: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3 full blocks => points for samples 0, 4096, 8192 (used = 3 < 64).
+	data := make([]byte, 3*4096*2*2)
+	if _, err := enc.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sm, err := meta.ReadMetadata(bitio.NewReader(bytes.NewReader(sb.Bytes())))
+	if err != nil {
+		t.Fatalf("metadata after Close: %v", err)
+	}
+	if len(sm.SeekPoints) != 3 {
+		t.Fatalf("seek points = %d, want 3", len(sm.SeekPoints))
+	}
+	want := []uint64{0, 4096, 8192}
+	for i, p := range sm.SeekPoints {
+		if p.SampleNumber != want[i] {
+			t.Fatalf("point[%d] sample = %d, want %d", i, p.SampleNumber, want[i])
+		}
+	}
+	// The first point's byte offset is 0 (first frame), and offsets must be increasing.
+	if sm.SeekPoints[0].ByteOffset != 0 {
+		t.Fatalf("point[0] byte offset = %d, want 0", sm.SeekPoints[0].ByteOffset)
+	}
+	for i := 1; i < len(sm.SeekPoints); i++ {
+		if sm.SeekPoints[i].ByteOffset <= sm.SeekPoints[i-1].ByteOffset {
+			t.Fatalf("byte offsets not increasing at %d", i)
+		}
+	}
+}
