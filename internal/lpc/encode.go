@@ -17,6 +17,26 @@ func ComputeFixedResiduals(res, src []int32, order int) {
 	}
 }
 
+// ComputeLPCResiduals computes the residuals for a quantized LPC predictor.
+// It is the exact integer inverse of RestoreLPC: for each n = order+i,
+//
+//	pred   = sum_j int64(qcoeff[j]) * int64(src[n-1-j])
+//	res[i] = src[n] - int32(pred >> shift)
+//
+// res must have length len(src)-order, and order must equal len(qcoeff).
+// The accumulator is int64 and the arithmetic shift is applied to the full
+// sum, matching RestoreLPC exactly so the decoder reconstructs bit-for-bit.
+func ComputeLPCResiduals(res, src, qcoeff []int32, shift, order int) {
+	for i := range res {
+		n := order + i
+		var pred int64
+		for j, c := range qcoeff {
+			pred += int64(c) * int64(src[n-1-j])
+		}
+		res[i] = src[n] - int32(pred>>uint(shift))
+	}
+}
+
 // BestFixedOrder returns the fixed order in [0, maxOrder] (capped at 4 and at
 // len(src)-1) whose residuals have the smallest sum of absolute values. Any order
 // round-trips; this only chooses the most compressible one cheaply.

@@ -45,7 +45,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y flac
 
       - name: Run tests
-        run: go test -race ./...
+        # -timeout 20m: the race-instrumented pcm suite (corpus re-encode plus
+        # libFLAC cross-validation) runs LPC analysis at levels 3-8 and exceeds
+        # the default 10m per-package timeout on CI runners.
+        run: go test -race -timeout 20m ./...
 
       - name: Rice 32-bit overflow guard (Linux)
         if: runner.os == 'Linux'
@@ -70,7 +73,7 @@ jobs:
         # -coverpkg=./... credits cross-package coverage: the decoder internals
         # are exercised by the pcm corpus conformance tests, not by per-package
         # unit tests alone.
-        run: go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -timeout 20m -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage
         if: matrix.coverage
