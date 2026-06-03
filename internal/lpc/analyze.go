@@ -155,13 +155,20 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 	var errAcc float64
 	for i, c := range lpc {
 		errAcc += c * scale
-		q := math.Round(errAcc)
+		// Carry only the unclamped rounding error into the next coefficient.
+		// Subtracting a clamped q would feed the (potentially large) clamping
+		// error forward, causing integrator windup that distorts later
+		// coefficients. Clamping is rare here, the shift is chosen so the
+		// largest coefficient fits the precision range, so in the common case
+		// rounded == q and this is identical to a plain error-feedback step.
+		rounded := math.Round(errAcc)
+		q := rounded
 		if q > float64(qmax) {
 			q = float64(qmax)
 		} else if q < float64(qmin) {
 			q = float64(qmin)
 		}
-		errAcc -= q
+		errAcc -= rounded
 		qcoeff[i] = int32(q)
 	}
 	return qcoeff, shift, true
@@ -176,6 +183,13 @@ func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift i
 // degenerate analysis). The returned coefficients always satisfy the decoder's
 // constraints (non-negative shift, coeffs fit the precision range).
 func AnalyzeLPC(samples []int32, window []float64, maxOrder, precision, eff int) (order, shift int, qcoeff []int32, ok bool) {
+	if precision < 1 || precision > 15 {
+		// The 4-bit subframe precision field stores precision-1, and the decoder
+		// rejects the reserved code 15 (precision 16). A zero or out-of-range
+		// precision is a programming error, so skip LPC rather than emit an
+		// invalid subframe or hit 1<<(precision-1) with precision 0.
+		return 0, 0, nil, false
+	}
 	n := len(samples)
 	if len(window) != n {
 		// Defensive: the documented precondition is len(window) == len(samples).

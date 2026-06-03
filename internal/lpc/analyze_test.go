@@ -271,3 +271,20 @@ func TestAnalyzeLPCSilence(t *testing.T) {
 		t.Fatal("ok=true for silence, want false")
 	}
 }
+
+func TestAnalyzeLPCInvalidPrecision(t *testing.T) {
+	src := arSignal(256)
+	window := TukeyWindow(len(src), 0.5)
+	// precision 0 would hit 1<<(precision-1); precision 16 would emit the
+	// reserved 4-bit code 15. Both must cleanly skip LPC, not panic or encode
+	// an invalid subframe.
+	for _, prec := range []int{0, -1, 16, 32} {
+		if _, _, _, ok := AnalyzeLPC(src, window, 8, prec, 16); ok {
+			t.Fatalf("ok=true for precision %d, want false", prec)
+		}
+	}
+	// The supported precision (15) still works on the same signal.
+	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16); !ok {
+		t.Fatal("ok=false for precision 15 on a correlated signal, want true")
+	}
+}
