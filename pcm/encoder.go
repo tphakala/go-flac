@@ -99,6 +99,11 @@ func (e *Encoder) Write(p []byte) (int, error) {
 	blockBytes := encoderBlockSize * e.frameLen
 	n := len(p) // captured before p is resliced below; Write must report this
 
+	// written counts bytes of p that landed in blocks already handed to the sink,
+	// so a mid-write emitBlock failure reports a contract-correct partial count
+	// (io.Writer requires the bytes consumed from p, not 0) instead of 0.
+	written := 0
+
 	// 1. Complete one block from leftover + the head of p, if we now have enough.
 	if len(e.leftover) > 0 {
 		need := blockBytes - len(e.leftover) // >= 1: leftover is always < blockBytes
@@ -109,17 +114,18 @@ func (e *Encoder) Write(p []byte) (int, error) {
 		e.carry = append(e.carry[:0], e.leftover...)
 		e.carry = append(e.carry, p[:need]...) // e.carry is now exactly one block
 		if err := e.emitBlock(e.carry, encoderBlockSize); err != nil {
-			return 0, err
+			return 0, err // boundary block failed: no bytes of p durably consumed
 		}
 		e.leftover = e.leftover[:0]
 		p = p[need:]
+		written = need
 	}
 
 	// 2. Emit whole blocks straight from p (no copy).
 	off := 0
 	for len(p)-off >= blockBytes {
 		if err := e.emitBlock(p[off:off+blockBytes], encoderBlockSize); err != nil {
-			return 0, err
+			return written + off, err
 		}
 		off += blockBytes
 	}

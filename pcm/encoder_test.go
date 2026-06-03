@@ -235,6 +235,46 @@ func TestEncoderWriteBoundaryChunks(t *testing.T) {
 	}
 }
 
+// armedFailWriter succeeds until armed, then allows `allow` more writes before
+// failing every subsequent write. It lets a test drive a sink failure on a chosen
+// block boundary without depending on how many writes the stream header emits.
+type armedFailWriter struct {
+	armed bool
+	allow int
+}
+
+func (w *armedFailWriter) Write(p []byte) (int, error) {
+	if w.armed {
+		if w.allow <= 0 {
+			return 0, errors.New("sink failure")
+		}
+		w.allow--
+	}
+	return len(p), nil
+}
+
+// TestEncoderWritePartialCountOnError checks the io.Writer contract: when a block
+// fails mid-Write after earlier blocks were already handed to the sink, Write must
+// report the bytes of p it consumed, not 0.
+func TestEncoderWritePartialCountOnError(t *testing.T) {
+	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 1, CompressionLevel: 0}
+	w := &armedFailWriter{}
+	enc, err := NewEncoder(w, cfg) // header writes happen while unarmed
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	blockBytes := encoderBlockSize * enc.frameLen
+
+	w.armed, w.allow = true, 1 // allow exactly one block frame, then fail
+	n, werr := enc.Write(make([]byte, 2*blockBytes))
+	if werr == nil {
+		t.Fatal("expected sink failure error, got nil")
+	}
+	if n != blockBytes {
+		t.Fatalf("Write returned n=%d on partial failure, want %d (one block consumed)", n, blockBytes)
+	}
+}
+
 func TestNewEncoderRejectsBadConfig(t *testing.T) {
 	bad := []Config{
 		{SampleRate: 0, BitDepth: 16, Channels: 2},
