@@ -3,6 +3,7 @@ package pcm
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,6 +154,84 @@ func TestEncodeNonSeekableUnknownSentinels(t *testing.T) {
 	var zero [16]byte
 	if si.MD5 != zero || si.TotalSamples != 0 {
 		t.Fatalf("non-seekable expected unknown sentinels, got MD5=%x total=%d", si.MD5, si.TotalSamples)
+	}
+}
+
+// TestEncoderCarryBounded asserts the join buffer stays bounded at single-block
+// scale regardless of any single Write size. The old Write concatenated all of a
+// large Write into e.carry and retained that backing array via carry[:0] reuse.
+func TestEncoderCarryBounded(t *testing.T) {
+	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 1, CompressionLevel: 0}
+	enc, err := NewEncoder(io.Discard, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockBytes := encoderBlockSize * enc.frameLen
+
+	// A small write leaves a partial-block remainder, so the next Write takes the
+	// leftover-join path.
+	if _, err := enc.Write(make([]byte, 100)); err != nil {
+		t.Fatal(err)
+	}
+	// A single very large Write. carry must not grow to match it.
+	if _, err := enc.Write(make([]byte, 64*blockBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if cap(enc.carry) > 4*blockBytes {
+		t.Fatalf("cap(e.carry) = %d, want <= %d (carry must stay bounded at single-block scale, not grow to the Write size)",
+			cap(enc.carry), 4*blockBytes)
+	}
+}
+
+// TestEncoderWriteBoundaryChunks drives Write through every boundary the bounded
+// rewrite cares about (sub-need accumulate, exact-block completion, empty write,
+// direct full block with no leftover) and asserts a byte-exact round trip.
+func TestEncoderWriteBoundaryChunks(t *testing.T) {
+	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 1, CompressionLevel: 0}
+	pcmBytes := genPCM(cfg, 4096*3) // three full blocks of mono 16-bit PCM
+	bytesPS := (cfg.BitDepth + 7) / 8
+	blockBytes := encoderBlockSize * bytesPS * cfg.Channels
+
+	path := filepath.Join(t.TempDir(), "out.flac")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, err := NewEncoder(f, cfg)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	//   100              -> leftover < need (accumulate only, no block emitted)
+	//   blockBytes-100   -> exactly completes block 1 (exact-block completion)
+	//   0                -> empty write
+	//   blockBytes       -> a full block with no prior leftover (direct path)
+	//   rest             -> remainder
+	sizes := []int{100, blockBytes - 100, 0, blockBytes}
+	off := 0
+	for _, s := range sizes {
+		if _, err := enc.Write(pcmBytes[off : off+s]); err != nil {
+			t.Fatalf("Write(%d): %v", s, err)
+		}
+		off += s
+	}
+	if _, err := enc.Write(pcmBytes[off:]); err != nil {
+		t.Fatalf("Write(rest): %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	f2, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f2.Close() }()
+	_, got := decodeAll(t, f2)
+	if !bytes.Equal(got, pcmBytes) {
+		t.Fatalf("boundary-chunk round trip mismatch (got %d bytes, want %d)", len(got), len(pcmBytes))
 	}
 }
 
