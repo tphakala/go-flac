@@ -209,8 +209,9 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 				ByteOffset:   uint64(frameOffset),
 				FrameSamples: uint16(n),
 			})
-			for int64(firstSample) >= e.nextBoundary { // skip boundaries this block passed
-				e.nextBoundary += int64(e.seekInterval)
+			if int64(firstSample) >= e.nextBoundary { // skip boundaries this block passed
+				steps := (int64(firstSample)-e.nextBoundary)/int64(e.seekInterval) + 1
+				e.nextBoundary += steps * int64(e.seekInterval)
 			}
 		}
 	}

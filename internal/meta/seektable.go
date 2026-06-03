@@ -42,13 +42,12 @@ func EncodeBlockHeader(last bool, btype, length int) []byte {
 
 // EncodeSeekPoints serializes points to a SEEKTABLE body (18 bytes each, big-endian).
 func EncodeSeekPoints(points []SeekPoint) []byte {
-	out := make([]byte, 0, len(points)*SeekPointBytes)
-	for _, p := range points {
-		var b [SeekPointBytes]byte
-		binary.BigEndian.PutUint64(b[0:8], p.SampleNumber)
-		binary.BigEndian.PutUint64(b[8:16], p.ByteOffset)
-		binary.BigEndian.PutUint16(b[16:18], p.FrameSamples)
-		out = append(out, b[:]...)
+	out := make([]byte, len(points)*SeekPointBytes)
+	for i, p := range points {
+		off := i * SeekPointBytes
+		binary.BigEndian.PutUint64(out[off:off+8], p.SampleNumber)
+		binary.BigEndian.PutUint64(out[off+8:off+16], p.ByteOffset)
+		binary.BigEndian.PutUint16(out[off+16:off+18], p.FrameSamples)
 	}
 	return out
 }

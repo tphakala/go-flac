@@ -328,6 +328,12 @@ func (d *Decoder) seekToEnd(total int64) (int64, error) {
 func (d *Decoder) narrowBySeekTable(target, lo, hi int64) (newLo, newHi int64) {
 	newLo, newHi = lo, hi
 	for _, p := range d.seekPoints {
+		// Ignore a corrupt seek point whose byte offset is negative (overflow on the
+		// uint64 -> int64 conversion) or points outside the audio region, so it cannot
+		// push the search bounds out of [audioStart, streamEnd].
+		if int64(p.ByteOffset) < 0 || int64(p.ByteOffset) > d.streamEnd-d.audioStart {
+			continue
+		}
 		off := d.audioStart + int64(p.ByteOffset)
 		if int64(p.SampleNumber) <= target && off > newLo {
 			newLo = off

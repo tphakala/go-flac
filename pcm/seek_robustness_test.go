@@ -89,3 +89,20 @@ func TestSeekStreamWithoutMaxBlockSize(t *testing.T) {
 		}
 	}
 }
+
+func TestNarrowBySeekTableIgnoresCorruptOffset(t *testing.T) {
+	// A corrupt SEEKTABLE point (byte offset overflowing int64, or pointing past the
+	// stream) must not push the search bounds outside [audioStart, streamEnd].
+	d := &Decoder{audioStart: 100, streamEnd: 10000}
+	d.seekPoints = []meta.SeekPoint{
+		{SampleNumber: 4096, ByteOffset: 5000},            // valid: brackets below the target
+		{SampleNumber: 0, ByteOffset: 1 << 40},            // corrupt: huge offset, sample <= target
+		{SampleNumber: 9000, ByteOffset: uint64(1) << 63}, // corrupt: negative as int64
+	}
+	const target = 5000
+	lo, hi := d.narrowBySeekTable(target, d.audioStart, d.streamEnd)
+	if lo < d.audioStart || lo > d.streamEnd || hi < d.audioStart || hi > d.streamEnd || lo > hi {
+		t.Fatalf("corrupt seek points pushed bounds out of range: lo=%d hi=%d (audioStart=%d streamEnd=%d)",
+			lo, hi, d.audioStart, d.streamEnd)
+	}
+}
