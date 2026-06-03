@@ -33,7 +33,8 @@ func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, f
 	case nch == 2 && p.Stereo != StereoIndependent && bps >= 25:
 		encodeStereo64(bw, p, bps, bs, ch[0], ch[1], frameNum)
 	case bps >= 25:
-		// Independent / mono / multichannel wide path: upcast each channel to int64.
+		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
+		// so upcast each channel to int64 before planning and writing.
 		window := apodizationWindow(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		buf := make([]int64, bs)
@@ -191,7 +192,7 @@ func encodeStereo64(bw *bitio.Writer, p Params, bps, bs int, l32, r32 []int32, f
 	case chMidSide:
 		writeSubframe64(bw, mid, bps, planM, p)
 		writeSubframe64(bw, side, bps+1, planS, p)
-	default:
+	default: // independent
 		writeSubframe64(bw, l, bps, planL, p)
 		writeSubframe64(bw, r, bps, planR, p)
 	}

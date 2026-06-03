@@ -20,7 +20,7 @@ type Frame struct {
 	Number        uint64    // sample number (variable blocksize) or frame number (fixed)
 
 	work32 [2][]int32 // reusable stereo-decorrelation scratch (common path)
-	work64 [2][]int64 // reusable scratch for the 32-bps side-channel path
+	work64 [2][]int64 // reusable scratch for the wide (25-32 bps) int64 decode path
 }
 
 // header holds the parsed frame header.
@@ -176,6 +176,8 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 
 	if cap(dst.work32[0]) < bs {
 		dst.work32[0] = make([]int32, bs)
+	}
+	if cap(dst.work32[1]) < bs {
 		dst.work32[1] = make([]int32, bs)
 	}
 	a := dst.work32[0][:bs]

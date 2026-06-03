@@ -209,6 +209,9 @@ func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPa
 		if p == 0 {
 			n -= predOrder
 			if n < 0 {
+				// planResidual never selects an order where the first partition is
+				// shorter than predOrder; this guards a future predictor (LPC) whose
+				// order could exceed a tiny partition length.
 				n = 0
 			}
 		}

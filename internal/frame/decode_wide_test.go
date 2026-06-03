@@ -8,7 +8,7 @@ import (
 )
 
 // Round-trip a wide independent (mono) frame end to end through EncodeFrame and Decode.
-// This fails before the dispatch fix because Decode uses int32 for independent channels.
+// Exercises the int64 independent-channel decode dispatch for bps >= 25.
 func TestDecodeWideMonoRoundTrip(t *testing.T) {
 	for _, bps := range []int{25, 28, 32} {
 		bs := 1024

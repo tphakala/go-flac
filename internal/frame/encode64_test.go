@@ -8,10 +8,10 @@ import (
 )
 
 // encodeStereo64 must produce a frame that frame.Decode reconstructs exactly at 32 bps.
-// frame.Decode already dispatches int64 for 32-bps stereo, so this test does not depend
-// on Task 9. The channels are strongly correlated so a side-using mode (assignment >= 8)
-// is chosen; that keeps decode on the int64 stereo path rather than the int32 independent
-// path (only fixed in Task 9).
+// frame.Decode already dispatches int64 for 32-bps stereo decorrelation, so this test
+// does not depend on the independent-channel wide dispatch. The channels are strongly
+// correlated so a side-using mode (assignment >= 8) is chosen; that keeps decode on the
+// int64 stereo decorrelation path rather than the independent path.
 func TestEncodeStereo64RoundTrip32(t *testing.T) {
 	const bps = 32
 	bs := 2048
@@ -43,8 +43,9 @@ func TestEncodeStereo64RoundTrip32(t *testing.T) {
 }
 
 // EncodeFrame must route bps >= 25 through the int64 path. Mono (independent) 32-bps:
-// each subframe must decode via the generic decodeSubframe64 (validated end-to-end in
-// Task 9). Here, assert the frame is produced and is smaller than the verbatim bound.
+// each subframe must decode via the generic decodeSubframe64 (validated end-to-end by the
+// decode round-trip tests). Here, assert the frame is produced and is smaller than the
+// verbatim bound.
 func TestEncodeFrameWideMono(t *testing.T) {
 	const bps = 32
 	bs := 1024
