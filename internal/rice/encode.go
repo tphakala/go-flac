@@ -9,13 +9,19 @@ import (
 const (
 	maxParam4  = 14 // method 0 (4-bit param), 15 is escape4
 	maxParam5  = 30 // method 1 (5-bit param), 31 is escape5
-	maxRawBits = 32
+	maxRawBits = 31 // escape width field is 5 bits (0..31)
 )
 
 // zigzag maps a signed residual to the unsigned value the bitstream stores. It is
 // the exact inverse of DecodeResidual's (u>>1)^-(u&1) de-interleave.
 func zigzag(r int32) uint64 {
 	return uint64(uint32((r << 1) ^ (r >> 31)))
+}
+
+// zigzag64 maps a signed int64 residual (up to ~34 bits at 32-bps) to the unsigned
+// value the bitstream stores. Inverse of DecodeResidual's de-interleave.
+func zigzag64(r int64) uint64 {
+	return uint64((r << 1) ^ (r >> 63))
 }
 
 // partPlan is the chosen coding for one partition.
@@ -30,24 +36,23 @@ type partPlan struct {
 func planPartition(zz []uint64) partPlan {
 	k, riceBitCount := bestParam(zz)
 
-	// Escape alternative: store each residual raw at the max needed width.
+	// Escape alternative: store each residual raw at the max needed width. The width
+	// field is 5 bits, so escape is only available when raw <= 31. If a residual needs
+	// 32+ bits (possible at wide bit depth), escape cannot represent it and must be
+	// skipped; the Rice parameter path or the subframe-level verbatim fallback covers it.
 	var maxU uint64
 	for _, u := range zz {
 		if u > maxU {
 			maxU = u
 		}
 	}
-	raw := bits.Len64(maxU)
-	if raw > maxRawBits {
-		raw = maxRawBits
+	if raw := bits.Len64(maxU); raw <= maxRawBits {
+		escBits := 5 + raw*len(zz)
+		if int64(escBits) < riceBitCount {
+			return partPlan{escape: true, rawBits: raw, payload: escBits}
+		}
 	}
-	// Escape partition body: 5-bit width field + raw samples.
-	escBits := 5 + raw*len(zz)
-	if int64(escBits) < riceBitCount {
-		return partPlan{escape: true, rawBits: raw, payload: escBits}
-	}
-	// Safe narrowing: this branch runs only when riceBitCount <= escBits, and
-	// escBits = 5 + raw*len(zz) <= 5 + 32*4096 ~ 131k, well inside int.
+	// Safe narrowing: riceBitCount <= ~131k for any real partition, inside int.
 	return partPlan{param: k, payload: int(riceBitCount)}
 }
 
@@ -165,6 +170,70 @@ func CostResidual(res []int32, blockSize, predOrder, maxPartOrder int) int {
 	zz := make([]uint64, len(res))
 	for i, r := range res {
 		zz[i] = zigzag(r)
+	}
+	_, _, _, total := planResidual(zz, blockSize, predOrder, maxPartOrder)
+	return total
+}
+
+// EncodeResidual64 is the int64-residual analogue of EncodeResidual, for wide
+// (25-32 bps) subframes. Planning operates on the shared zz []uint64 path.
+func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPartOrder int) int {
+	zz := make([]uint64, len(res))
+	for i, r := range res {
+		zz[i] = zigzag64(r)
+	}
+
+	po, plans, paramBits, _ := planResidual(zz, blockSize, predOrder, maxPartOrder)
+
+	method := method4bit
+	escapeCode := uint64(escape4)
+	if paramBits == 5 {
+		method = method5bit
+		escapeCode = uint64(escape5)
+	}
+
+	written := 2 + 4 // method (2 bits) + partition order (4 bits)
+	bw.WriteBits(uint64(method), 2)
+	bw.WriteBits(uint64(po), 4)
+
+	partitions := 1 << po
+	partLen := blockSize / partitions
+	idx := 0
+	for p := range partitions {
+		n := partLen
+		if p == 0 {
+			n -= predOrder
+			if n < 0 {
+				n = 0
+			}
+		}
+		pl := plans[p]
+		written += paramBits + pl.payload
+		if pl.escape {
+			bw.WriteBits(escapeCode, uint(paramBits))
+			bw.WriteBits(uint64(pl.rawBits), 5)
+			for i := range n {
+				bw.WriteSignedBits(res[idx+i], uint(pl.rawBits))
+			}
+		} else {
+			k := uint(pl.param)
+			bw.WriteBits(uint64(pl.param), uint(paramBits))
+			for i := range n {
+				u := zz[idx+i]
+				bw.WriteUnary(u >> k)
+				bw.WriteBits(u&((uint64(1)<<k)-1), k)
+			}
+		}
+		idx += n
+	}
+	return written
+}
+
+// CostResidual64 returns the bits EncodeResidual64 would write for res.
+func CostResidual64(res []int64, blockSize, predOrder, maxPartOrder int) int {
+	zz := make([]uint64, len(res))
+	for i, r := range res {
+		zz[i] = zigzag64(r)
 	}
 	_, _, _, total := planResidual(zz, blockSize, predOrder, maxPartOrder)
 	return total
