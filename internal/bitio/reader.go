@@ -17,6 +17,7 @@ type Reader struct {
 	cur  byte // current partial byte
 	nbit uint // number of valid low bits remaining in cur (0..8)
 	err  error
+	pos  int64 // whole bytes pulled from src; exact byte position only when ByteAligned
 }
 
 // NewReader returns a Reader over r. If r already implements io.ByteReader it is
@@ -47,6 +48,7 @@ func (r *Reader) loadByte() error {
 		r.err = err
 		return err
 	}
+	r.pos++
 	r.cur = b
 	r.nbit = 8
 	return nil
@@ -146,4 +148,17 @@ func (r *Reader) SkipToByteBoundary() error {
 	}
 	r.nbit = 0
 	return nil
+}
+
+// BytesRead returns the number of whole bytes consumed from the source. It is
+// meaningful only when ByteAligned() is true (no partial byte is mid-read); callers
+// read it at frame and metadata boundaries, which are byte aligned.
+func (r *Reader) BytesRead() int64 { return r.pos }
+
+// NewReaderAt returns a Reader over r whose byte counter starts at pos. Use it after
+// seeking the underlying source to an absolute offset, so BytesRead stays absolute.
+func NewReaderAt(r io.Reader, pos int64) *Reader {
+	br := NewReader(r)
+	br.pos = pos
+	return br
 }
