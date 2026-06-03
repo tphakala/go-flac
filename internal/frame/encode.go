@@ -52,6 +52,8 @@ const (
 )
 
 // encodeStereo selects a channel assignment by estimated bits and writes it.
+//
+//nolint:dupl // intentional: typed parallel of encodeStereo64
 func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNum uint64) {
 	side := make([]int32, bs)
 	mid := make([]int32, bs)
@@ -114,4 +116,68 @@ func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNu
 func finishFrame(bw *bitio.Writer) {
 	bw.AlignByte()
 	bw.WriteBits(uint64(crc.Checksum16(bw.Bytes())), 16)
+}
+
+// encodeStereo64 is the int64 analogue of encodeStereo for 25-32 bps. The l/r inputs
+// arrive as int32 and are upcast to int64 before wide-domain decorrelation.
+//
+//nolint:dupl // intentional: typed parallel of encodeStereo
+func encodeStereo64(bw *bitio.Writer, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
+	l := make([]int64, bs)
+	r := make([]int64, bs)
+	for i := range bs {
+		l[i] = int64(l32[i])
+		r[i] = int64(r32[i])
+	}
+	side := make([]int64, bs)
+	mid := make([]int64, bs)
+	for i := range bs {
+		side[i] = l[i] - r[i]
+		mid[i] = (l[i] + r[i]) >> 1
+	}
+	window := apodizationWindow(p, bs)
+	planL := planSubframe64(l, bps, p, window)
+	planR := planSubframe64(r, bps, p, window)
+	planM := planSubframe64(mid, bps, p, window)
+	planS := planSubframe64(side, bps+1, p, window)
+
+	indep := planL.bits + planR.bits
+	ls := planL.bits + planS.bits
+	rs := planS.bits + planR.bits
+	ms := planM.bits + planS.bits
+
+	chCode := chIndependent2
+	minCost := indep
+	if p.Stereo == StereoAdaptive {
+		if ms < minCost {
+			chCode = chMidSide
+		}
+	} else { // StereoFull
+		if ls < minCost {
+			minCost, chCode = ls, chLeftSide
+		}
+		if rs < minCost {
+			minCost, chCode = rs, chRightSide
+		}
+		if ms < minCost {
+			chCode = chMidSide
+		}
+	}
+
+	writeFrameHeader(bw, bs, chCode, frameNum)
+	switch chCode {
+	case chLeftSide:
+		writeSubframe64(bw, l, bps, planL, p)
+		writeSubframe64(bw, side, bps+1, planS, p)
+	case chRightSide:
+		writeSubframe64(bw, side, bps+1, planS, p)
+		writeSubframe64(bw, r, bps, planR, p)
+	case chMidSide:
+		writeSubframe64(bw, mid, bps, planM, p)
+		writeSubframe64(bw, side, bps+1, planS, p)
+	default:
+		writeSubframe64(bw, l, bps, planL, p)
+		writeSubframe64(bw, r, bps, planR, p)
+	}
+	finishFrame(bw)
 }
