@@ -12,8 +12,10 @@ import (
 // Metadata block types (FLAC spec).
 const (
 	typeStreamInfo = 0
-	// 1 PADDING, 2 APPLICATION, 3 SEEKTABLE, 4 VORBIS_COMMENT, 5 CUESHEET,
-	// 6 PICTURE are recognized and skipped by length; 127 is invalid.
+	typePadding    = 1
+	typeSeekTable  = 3
+	// 2 APPLICATION, 4 VORBIS_COMMENT, 5 CUESHEET, 6 PICTURE are recognized and
+	// skipped by length; 127 is invalid.
 	typeInvalid = 127
 )
 
@@ -60,6 +62,16 @@ func readMetadata(br *bitio.Reader) (StreamMeta, error) {
 			}
 			sm.Info, sm.MinBlock, sm.MaxBlock, sm.MaxFrame = si, mnb, mxb, mxf
 			haveStreamInfo = true
+		case typeSeekTable:
+			body, err := readBytes(br, int(length))
+			if err != nil {
+				return StreamMeta{}, err
+			}
+			pts, err := parseSeekTable(body)
+			if err != nil {
+				return StreamMeta{}, err
+			}
+			sm.SeekPoints = pts
 		default:
 			if err := skipBytes(br, int(length)); err != nil {
 				return StreamMeta{}, err
