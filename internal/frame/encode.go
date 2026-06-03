@@ -4,7 +4,19 @@ import (
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
 	"github.com/tphakala/go-flac/internal/crc"
+	"github.com/tphakala/go-flac/internal/lpc"
 )
+
+// apodizationWindow returns the analysis window for one frame of length n, or
+// nil when LPC is disabled. All subframes in a frame share the block length, so
+// the window is computed once per frame.
+func apodizationWindow(p Params, n int) []float64 {
+	if p.MaxLPCOrder == 0 {
+		return nil
+	}
+	// M3b ships a single window; Apodization selects it for forward-compat.
+	return lpc.TukeyWindow(n, 0.5)
+}
 
 // EncodeFrame encodes one frame (one block per channel) into bw and returns the
 // assembled frame bytes. bw is Reset at entry; the returned slice aliases bw's
@@ -18,9 +30,10 @@ func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, f
 	if nch == 2 && p.Stereo != StereoIndependent && bps <= 24 {
 		encodeStereo(bw, p, bps, bs, ch[0], ch[1], frameNum)
 	} else {
+		window := apodizationWindow(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		for c := range nch {
-			plan := planSubframe(ch[c], bps, p)
+			plan := planSubframe(ch[c], bps, p, window)
 			writeSubframe(bw, ch[c], bps, plan, p)
 		}
 		finishFrame(bw)
@@ -46,10 +59,11 @@ func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNu
 		side[i] = l[i] - r[i]
 		mid[i] = (l[i] + r[i]) >> 1
 	}
-	planL := planSubframe(l, bps, p)
-	planR := planSubframe(r, bps, p)
-	planM := planSubframe(mid, bps, p)
-	planS := planSubframe(side, bps+1, p)
+	window := apodizationWindow(p, bs)
+	planL := planSubframe(l, bps, p, window)
+	planR := planSubframe(r, bps, p, window)
+	planM := planSubframe(mid, bps, p, window)
+	planS := planSubframe(side, bps+1, p, window)
 
 	// Candidate costs.
 	indep := planL.bits + planR.bits
