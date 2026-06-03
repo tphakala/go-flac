@@ -142,15 +142,14 @@ func finishFrame(bw *bitio.Writer) {
 func encodeStereo64(bw *bitio.Writer, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
 	l := make([]int64, bs)
 	r := make([]int64, bs)
-	for i := range bs {
-		l[i] = int64(l32[i])
-		r[i] = int64(r32[i])
-	}
 	side := make([]int64, bs)
 	mid := make([]int64, bs)
+	// Upcast and decorrelate in a single pass over the block.
 	for i := range bs {
-		side[i] = l[i] - r[i]
-		mid[i] = (l[i] + r[i]) >> 1
+		li, ri := int64(l32[i]), int64(r32[i])
+		l[i], r[i] = li, ri
+		side[i] = li - ri
+		mid[i] = (li + ri) >> 1
 	}
 	window := apodizationWindow(p, bs)
 	planL := planSubframe64(l, bps, p, window)
