@@ -30,11 +30,12 @@ func TestEncodeResidual64WideRoundTrip(t *testing.T) {
 	res[7] = (1 << 33) - 1 // 34-bit zigzag, un-escape-able
 	bw := bitio.NewWriter()
 	bw.Reset()
-	wrote := EncodeResidual64(bw, res, len(res), 0, 0)
+	var sc Scratch
+	wrote := EncodeResidual64(bw, res, len(res), 0, 0, &sc)
 	if wrote <= 0 {
 		t.Fatalf("EncodeResidual64 wrote %d bits", wrote)
 	}
-	cost := CostResidual64(res, len(res), 0, 0)
+	cost := CostResidual64(res, len(res), 0, 0, &sc)
 	if cost != wrote {
 		t.Fatalf("CostResidual64 %d != EncodeResidual64 %d", cost, wrote)
 	}

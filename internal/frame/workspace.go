@@ -1,5 +1,7 @@
 package frame
 
+import "github.com/tphakala/go-flac/internal/rice"
+
 // Workspace holds the per-encoder scratch buffers reused across frames so the
 // encode hot path allocates nothing in steady state. One Workspace per
 // pcm.Encoder; not safe for concurrent use by multiple goroutines (each encoder
@@ -9,6 +11,8 @@ type Workspace struct {
 	// Stereo decorrelation block buffers (shared; int32 + int64 wide path).
 	side, mid     []int32
 	side64, mid64 []int64
+	// Rice planning scratch reused across subframes (zigzag sums, plans).
+	rice rice.Scratch
 }
 
 // NewWorkspace allocates a Workspace sized for the given maximum block size,

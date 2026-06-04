@@ -61,8 +61,9 @@ func TestWastedBitsAllZeroIsZero(t *testing.T) {
 func roundTripSubframe(t *testing.T, s []int32, bps int, p Params) {
 	t.Helper()
 	bw := bitio.NewWriter()
-	plan := planSubframe(s, bps, p, nil)
-	writeSubframe(bw, s, bps, plan, p)
+	var ws Workspace
+	plan := planSubframe(&ws, s, bps, p, nil)
+	writeSubframe(bw, &ws, s, bps, plan, p)
 	bw.AlignByte()
 	got := decodeOneSubframe(t, bw.Bytes(), len(s), bps)
 	for i := range s {

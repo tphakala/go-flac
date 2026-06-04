@@ -13,7 +13,8 @@ import (
 func encodeThenDecode(t *testing.T, res []int32, blockSize, predOrder, maxPO int) {
 	t.Helper()
 	bw := bitio.NewWriter()
-	EncodeResidual(bw, res, blockSize, predOrder, maxPO)
+	var sc Scratch
+	EncodeResidual(bw, res, blockSize, predOrder, maxPO, &sc)
 	bw.AlignByte()
 
 	got := make([]int32, blockSize)
@@ -80,8 +81,9 @@ func TestRiceBitsNoInt32Overflow(t *testing.T) {
 func TestCostMatchesWrittenBits(t *testing.T) {
 	res := []int32{0, 5, -5, 12, -12, 3, -3, 9}
 	bw := bitio.NewWriter()
-	written := EncodeResidual(bw, res, 8, 0, 2)
-	if got := CostResidual(res, 8, 0, 2); got != written {
+	var sc Scratch
+	written := EncodeResidual(bw, res, 8, 0, 2, &sc)
+	if got := CostResidual(res, 8, 0, 2, &sc); got != written {
 		t.Fatalf("CostResidual=%d, EncodeResidual wrote=%d", got, written)
 	}
 }

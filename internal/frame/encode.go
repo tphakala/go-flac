@@ -42,16 +42,16 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 			for i := range bs {
 				buf[i] = int64(ch[c][i])
 			}
-			plan := planSubframe64(buf, bps, p, window)
-			writeSubframe64(bw, buf, bps, plan, p)
+			plan := planSubframe64(ws, buf, bps, p, window)
+			writeSubframe64(bw, ws, buf, bps, plan, p)
 		}
 		finishFrame(bw)
 	default:
 		window := apodizationWindow(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		for c := range nch {
-			plan := planSubframe(ch[c], bps, p, window)
-			writeSubframe(bw, ch[c], bps, plan, p)
+			plan := planSubframe(ws, ch[c], bps, p, window)
+			writeSubframe(bw, ws, ch[c], bps, plan, p)
 		}
 		finishFrame(bw)
 	}
@@ -79,10 +79,10 @@ func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r [
 		mid[i] = (l[i] + r[i]) >> 1
 	}
 	window := apodizationWindow(p, bs)
-	planL := planSubframe(l, bps, p, window)
-	planR := planSubframe(r, bps, p, window)
-	planM := planSubframe(mid, bps, p, window)
-	planS := planSubframe(side, bps+1, p, window)
+	planL := planSubframe(ws, l, bps, p, window)
+	planR := planSubframe(ws, r, bps, p, window)
+	planM := planSubframe(ws, mid, bps, p, window)
+	planS := planSubframe(ws, side, bps+1, p, window)
 
 	// Candidate costs.
 	indep := planL.bits + planR.bits
@@ -114,17 +114,17 @@ func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r [
 	writeFrameHeader(bw, bs, chCode, frameNum)
 	switch chCode {
 	case chLeftSide:
-		writeSubframe(bw, l, bps, planL, p)
-		writeSubframe(bw, side, bps+1, planS, p)
+		writeSubframe(bw, ws, l, bps, planL, p)
+		writeSubframe(bw, ws, side, bps+1, planS, p)
 	case chRightSide:
-		writeSubframe(bw, side, bps+1, planS, p)
-		writeSubframe(bw, r, bps, planR, p)
+		writeSubframe(bw, ws, side, bps+1, planS, p)
+		writeSubframe(bw, ws, r, bps, planR, p)
 	case chMidSide:
-		writeSubframe(bw, mid, bps, planM, p)
-		writeSubframe(bw, side, bps+1, planS, p)
+		writeSubframe(bw, ws, mid, bps, planM, p)
+		writeSubframe(bw, ws, side, bps+1, planS, p)
 	default: // independent
-		writeSubframe(bw, l, bps, planL, p)
-		writeSubframe(bw, r, bps, planR, p)
+		writeSubframe(bw, ws, l, bps, planL, p)
+		writeSubframe(bw, ws, r, bps, planR, p)
 	}
 	finishFrame(bw)
 }
@@ -152,10 +152,10 @@ func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32,
 		mid[i] = (li + ri) >> 1
 	}
 	window := apodizationWindow(p, bs)
-	planL := planSubframe64(l, bps, p, window)
-	planR := planSubframe64(r, bps, p, window)
-	planM := planSubframe64(mid, bps, p, window)
-	planS := planSubframe64(side, bps+1, p, window)
+	planL := planSubframe64(ws, l, bps, p, window)
+	planR := planSubframe64(ws, r, bps, p, window)
+	planM := planSubframe64(ws, mid, bps, p, window)
+	planS := planSubframe64(ws, side, bps+1, p, window)
 
 	indep := planL.bits + planR.bits
 	ls := planL.bits + planS.bits
@@ -183,17 +183,17 @@ func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32,
 	writeFrameHeader(bw, bs, chCode, frameNum)
 	switch chCode {
 	case chLeftSide:
-		writeSubframe64(bw, l, bps, planL, p)
-		writeSubframe64(bw, side, bps+1, planS, p)
+		writeSubframe64(bw, ws, l, bps, planL, p)
+		writeSubframe64(bw, ws, side, bps+1, planS, p)
 	case chRightSide:
-		writeSubframe64(bw, side, bps+1, planS, p)
-		writeSubframe64(bw, r, bps, planR, p)
+		writeSubframe64(bw, ws, side, bps+1, planS, p)
+		writeSubframe64(bw, ws, r, bps, planR, p)
 	case chMidSide:
-		writeSubframe64(bw, mid, bps, planM, p)
-		writeSubframe64(bw, side, bps+1, planS, p)
+		writeSubframe64(bw, ws, mid, bps, planM, p)
+		writeSubframe64(bw, ws, side, bps+1, planS, p)
 	default: // independent
-		writeSubframe64(bw, l, bps, planL, p)
-		writeSubframe64(bw, r, bps, planR, p)
+		writeSubframe64(bw, ws, l, bps, planL, p)
+		writeSubframe64(bw, ws, r, bps, planR, p)
 	}
 	finishFrame(bw)
 }

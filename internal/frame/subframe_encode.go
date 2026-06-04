@@ -67,7 +67,7 @@ type subframePlan struct {
 // planSubframe chooses the cheapest subframe encoding for s at the given bps.
 //
 //nolint:dupl // intentional: typed parallel of planSubframe64
-func planSubframe(s []int32, bps int, p Params, window []float64) subframePlan {
+func planSubframe(ws *Workspace, s []int32, bps int, p Params, window []float64) subframePlan {
 	if allEqual(s) {
 		return subframePlan{kind: 0, bits: 1 + 6 + 1 + bps}
 	}
@@ -86,7 +86,7 @@ func planSubframe(s []int32, bps int, p Params, window []float64) subframePlan {
 	}
 	shifted := shiftRight(s, wasted)
 
-	fOrder, fResBits := chooseFixedOrder(shifted, p)
+	fOrder, fResBits := chooseFixedOrder(ws, shifted, p)
 	fixedBits := hdrBits + fOrder*eff + fResBits
 	verbatimBits := hdrBits + len(s)*eff
 
@@ -98,7 +98,7 @@ func planSubframe(s []int32, bps int, p Params, window []float64) subframePlan {
 	}
 
 	if p.MaxLPCOrder > 0 && window != nil {
-		if lOrder, qc, shift, lResBits, ok := chooseLPCPlan(shifted, eff, p, window); ok {
+		if lOrder, qc, shift, lResBits, ok := chooseLPCPlan(ws, shifted, eff, p, window); ok {
 			lpcBits := hdrBits + lOrder*eff + 4 + 5 + lOrder*p.LPCPrecision + lResBits
 			if lpcBits < best.bits {
 				best = subframePlan{kind: 3, order: lOrder, wasted: wasted, bits: lpcBits, qcoeff: qc, shift: shift}
@@ -109,16 +109,16 @@ func planSubframe(s []int32, bps int, p Params, window []float64) subframePlan {
 }
 
 // writeSubframe writes s according to plan.
-func writeSubframe(bw *bitio.Writer, s []int32, bps int, plan subframePlan, p Params) {
+func writeSubframe(bw *bitio.Writer, ws *Workspace, s []int32, bps int, plan subframePlan, p Params) {
 	switch plan.kind {
 	case 0:
 		writeConstant(bw, s[0], 0, bps)
 	case 1:
 		writeVerbatim(bw, s, plan.wasted, bps)
 	case 3:
-		writeLPC(bw, s, plan.order, plan.qcoeff, plan.shift, plan.wasted, bps, p.LPCPrecision, p.MaxPartitionOrder)
+		writeLPC(bw, ws, s, plan.order, plan.qcoeff, plan.shift, plan.wasted, bps, p.LPCPrecision, p.MaxPartitionOrder)
 	default:
-		writeFixed(bw, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
+		writeFixed(bw, ws, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
 	}
 }
 
@@ -127,7 +127,7 @@ func writeSubframe(bw *bitio.Writer, s []int32, bps int, plan subframePlan, p Pa
 // residual. precision is the coefficient bit width (p.LPCPrecision). It mirrors
 // writeFixed and recomputes residuals with ComputeLPCResiduals (the integer
 // inverse of RestoreLPC), so the decoder reconstructs the samples exactly.
-func writeLPC(bw *bitio.Writer, s []int32, order int, qcoeff []int32, shift, wasted, bps, precision, maxPartOrder int) {
+func writeLPC(bw *bitio.Writer, ws *Workspace, s []int32, order int, qcoeff []int32, shift, wasted, bps, precision, maxPartOrder int) {
 	writeSubframeHeader(bw, 31+order, wasted)
 	eff := uint(bps - wasted)
 	shifted := shiftRight(s, wasted)
@@ -141,11 +141,11 @@ func writeLPC(bw *bitio.Writer, s []int32, order int, qcoeff []int32, shift, was
 	}
 	res := make([]int32, len(shifted)-order)
 	lpc.ComputeLPCResiduals(res, shifted, qcoeff, shift, order)
-	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder)
+	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder, &ws.rice)
 }
 
 // writeFixed writes a fixed-predictor subframe of the given order.
-func writeFixed(bw *bitio.Writer, s []int32, order, wasted, bps, maxPartOrder int) {
+func writeFixed(bw *bitio.Writer, ws *Workspace, s []int32, order, wasted, bps, maxPartOrder int) {
 	writeSubframeHeader(bw, 8+order, wasted)
 	eff := uint(bps - wasted)
 	shifted := shiftRight(s, wasted)
@@ -154,13 +154,15 @@ func writeFixed(bw *bitio.Writer, s []int32, order, wasted, bps, maxPartOrder in
 	}
 	res := make([]int32, len(shifted)-order)
 	lpc.ComputeFixedResiduals(res, shifted, order)
-	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder)
+	rice.EncodeResidual(bw, res, len(shifted), order, maxPartOrder, &ws.rice)
 }
 
 // chooseFixedOrder returns the fixed predictor order to use for shifted together
 // with the Rice cost (in bits) of that order's residuals, so the caller does not
 // have to recompute the residuals to learn their cost.
-func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
+//
+//nolint:dupl // intentional: typed parallel of chooseFixedOrder64
+func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits int) {
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
 		maxOrder := min(4, len(shifted)-1)
@@ -168,7 +170,7 @@ func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
 		for o := 0; o <= maxOrder; o++ {
 			r := res[:len(shifted)-o]
 			lpc.ComputeFixedResiduals(r, shifted, o)
-			b := rice.CostResidual(r, len(shifted), o, p.MaxPartitionOrder)
+			b := rice.CostResidual(r, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
 			if b < bestBits {
 				bestBits, bestOrder = b, o
 			}
@@ -178,7 +180,7 @@ func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
 	order = lpc.BestFixedOrder(shifted, 4)
 	res := make([]int32, len(shifted)-order)
 	lpc.ComputeFixedResiduals(res, shifted, order)
-	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder)
+	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
 }
 
 // chooseLPCPlan runs LPC analysis on the wasted-bits-shifted samples and, if
@@ -186,14 +188,14 @@ func chooseFixedOrder(shifted []int32, p Params) (order, resBits int) {
 // and the exact Rice residual cost (the residual cost only; the warmup, coeff,
 // precision and shift field bits are added by the caller). ok is false when LPC
 // is not applicable for this subframe.
-func chooseLPCPlan(shifted []int32, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
+func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
 	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
 	if !aok {
 		return 0, nil, 0, 0, false
 	}
 	res := make([]int32, len(shifted)-o)
 	lpc.ComputeLPCResiduals(res, shifted, qc, sh, o)
-	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder), true
+	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
 
 // wastedBits64 returns the number of low-order zero bits common to every sample.
@@ -235,7 +237,9 @@ func shiftRight64(s []int64, wasted int) []int64 {
 // chooseFixedOrder64 returns the fixed predictor order to use for shifted together
 // with the Rice cost (in bits) of that order's residuals. Mirrors chooseFixedOrder
 // but operates on int64 samples for wide bit-depth support.
-func chooseFixedOrder64(shifted []int64, p Params) (order, resBits int) {
+//
+//nolint:dupl // intentional: typed parallel of chooseFixedOrder
+func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBits int) {
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
 		maxOrder := min(4, len(shifted)-1)
@@ -243,7 +247,7 @@ func chooseFixedOrder64(shifted []int64, p Params) (order, resBits int) {
 		for o := 0; o <= maxOrder; o++ {
 			r := res[:len(shifted)-o]
 			lpc.ComputeFixedResiduals64(r, shifted, o)
-			b := rice.CostResidual64(r, len(shifted), o, p.MaxPartitionOrder)
+			b := rice.CostResidual64(r, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
 			if b < bestBits {
 				bestBits, bestOrder = b, o
 			}
@@ -253,20 +257,20 @@ func chooseFixedOrder64(shifted []int64, p Params) (order, resBits int) {
 	order = lpc.BestFixedOrder64(shifted, 4)
 	res := make([]int64, len(shifted)-order)
 	lpc.ComputeFixedResiduals64(res, shifted, order)
-	return order, rice.CostResidual64(res, len(shifted), order, p.MaxPartitionOrder)
+	return order, rice.CostResidual64(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
 }
 
 // chooseLPCPlan64 runs LPC analysis on the wasted-bits-shifted int64 samples and,
 // if applicable, returns the chosen order, its quantized coefficients and shift,
 // and the exact Rice residual cost. Mirrors chooseLPCPlan for wide bit-depth support.
-func chooseLPCPlan64(shifted []int64, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
+func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
 	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
 	if !aok {
 		return 0, nil, 0, 0, false
 	}
 	res := make([]int64, len(shifted)-o)
 	lpc.ComputeLPCResiduals64(res, shifted, qc, sh, o)
-	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder), true
+	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
 
 // writeConstant64 writes a FLAC constant subframe for int64 samples.
@@ -286,7 +290,7 @@ func writeVerbatim64(bw *bitio.Writer, s []int64, wasted, bps int) {
 
 // writeLPC64 writes a SUBFRAME_LPC for int64 samples. Mirrors writeLPC exactly,
 // with the int32(...) casts removed and the *64 residual callees used.
-func writeLPC64(bw *bitio.Writer, s []int64, order int, qcoeff []int32, shift, wasted, bps, precision, maxPartOrder int) {
+func writeLPC64(bw *bitio.Writer, ws *Workspace, s []int64, order int, qcoeff []int32, shift, wasted, bps, precision, maxPartOrder int) {
 	writeSubframeHeader(bw, 31+order, wasted)
 	eff := uint(bps - wasted)
 	shifted := shiftRight64(s, wasted)
@@ -300,12 +304,12 @@ func writeLPC64(bw *bitio.Writer, s []int64, order int, qcoeff []int32, shift, w
 	}
 	res := make([]int64, len(shifted)-order)
 	lpc.ComputeLPCResiduals64(res, shifted, qcoeff, shift, order)
-	rice.EncodeResidual64(bw, res, len(shifted), order, maxPartOrder)
+	rice.EncodeResidual64(bw, res, len(shifted), order, maxPartOrder, &ws.rice)
 }
 
 // writeFixed64 writes a fixed-predictor subframe for int64 samples.
 // Mirrors writeFixed exactly, with the int32(...) casts removed and the *64 callees used.
-func writeFixed64(bw *bitio.Writer, s []int64, order, wasted, bps, maxPartOrder int) {
+func writeFixed64(bw *bitio.Writer, ws *Workspace, s []int64, order, wasted, bps, maxPartOrder int) {
 	writeSubframeHeader(bw, 8+order, wasted)
 	eff := uint(bps - wasted)
 	shifted := shiftRight64(s, wasted)
@@ -314,14 +318,14 @@ func writeFixed64(bw *bitio.Writer, s []int64, order, wasted, bps, maxPartOrder 
 	}
 	res := make([]int64, len(shifted)-order)
 	lpc.ComputeFixedResiduals64(res, shifted, order)
-	rice.EncodeResidual64(bw, res, len(shifted), order, maxPartOrder)
+	rice.EncodeResidual64(bw, res, len(shifted), order, maxPartOrder, &ws.rice)
 }
 
 // planSubframe64 chooses the cheapest subframe encoding for int64 samples at the
 // given bps. Mirrors planSubframe exactly: same accounting, same tie-breaking rules.
 //
 //nolint:dupl // intentional: typed parallel of planSubframe
-func planSubframe64(s []int64, bps int, p Params, window []float64) subframePlan {
+func planSubframe64(ws *Workspace, s []int64, bps int, p Params, window []float64) subframePlan {
 	if allEqual64(s) {
 		return subframePlan{kind: 0, bits: 1 + 6 + 1 + bps}
 	}
@@ -336,7 +340,7 @@ func planSubframe64(s []int64, bps int, p Params, window []float64) subframePlan
 	}
 	shifted := shiftRight64(s, wasted)
 
-	fOrder, fResBits := chooseFixedOrder64(shifted, p)
+	fOrder, fResBits := chooseFixedOrder64(ws, shifted, p)
 	fixedBits := hdrBits + fOrder*eff + fResBits
 	verbatimBits := hdrBits + len(s)*eff
 
@@ -346,7 +350,7 @@ func planSubframe64(s []int64, bps int, p Params, window []float64) subframePlan
 	}
 
 	if p.MaxLPCOrder > 0 && window != nil {
-		if lOrder, qc, shift, lResBits, ok := chooseLPCPlan64(shifted, eff, p, window); ok {
+		if lOrder, qc, shift, lResBits, ok := chooseLPCPlan64(ws, shifted, eff, p, window); ok {
 			lpcBits := hdrBits + lOrder*eff + 4 + 5 + lOrder*p.LPCPrecision + lResBits
 			if lpcBits < best.bits {
 				best = subframePlan{kind: 3, order: lOrder, wasted: wasted, bits: lpcBits, qcoeff: qc, shift: shift}
@@ -357,16 +361,16 @@ func planSubframe64(s []int64, bps int, p Params, window []float64) subframePlan
 }
 
 // writeSubframe64 writes s according to plan for int64 samples. Mirrors writeSubframe.
-func writeSubframe64(bw *bitio.Writer, s []int64, bps int, plan subframePlan, p Params) {
+func writeSubframe64(bw *bitio.Writer, ws *Workspace, s []int64, bps int, plan subframePlan, p Params) {
 	switch plan.kind {
 	case 0:
 		writeConstant64(bw, s[0], 0, bps)
 	case 1:
 		writeVerbatim64(bw, s, plan.wasted, bps)
 	case 3:
-		writeLPC64(bw, s, plan.order, plan.qcoeff, plan.shift, plan.wasted, bps, p.LPCPrecision, p.MaxPartitionOrder)
+		writeLPC64(bw, ws, s, plan.order, plan.qcoeff, plan.shift, plan.wasted, bps, p.LPCPrecision, p.MaxPartitionOrder)
 	default:
-		writeFixed64(bw, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
+		writeFixed64(bw, ws, s, plan.order, plan.wasted, bps, p.MaxPartitionOrder)
 	}
 }
 

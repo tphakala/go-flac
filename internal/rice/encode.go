@@ -32,6 +32,55 @@ type partPlan struct {
 	payload int // bits for the partition body (excluding the parameter field itself)
 }
 
+// Scratch holds reusable Rice planning buffers owned by the caller (the encoder
+// Workspace). Single-use within one planning call; safe to reuse across calls and
+// across subframes. Buffers grow on demand to fit, then are reused.
+type Scratch struct {
+	sums  []uint64   // finest-order [partitions*ncols] flattened
+	maxU  []uint64   // finest-order per-partition max zigzag
+	cur   []partPlan // working per-order plan buffer
+	plans []partPlan // chosen (best) partition plan, returned aliased
+}
+
+func (s *Scratch) ensure(parts, ncols int) {
+	if cap(s.sums) < parts*ncols {
+		s.sums = make([]uint64, parts*ncols)
+	}
+	s.sums = s.sums[:parts*ncols]
+	if cap(s.maxU) < parts {
+		s.maxU = make([]uint64, parts)
+	}
+	s.maxU = s.maxU[:parts]
+	if cap(s.cur) < parts {
+		s.cur = make([]partPlan, parts)
+	}
+	s.cur = s.cur[:parts]
+	if cap(s.plans) < parts {
+		s.plans = make([]partPlan, parts)
+	}
+}
+
+// feasiblePmax returns the largest feasible partition order for a block of the
+// given size and predictor order, capped at maxPartOrder. It reproduces the pmax
+// loop from the legacy planResidual: an order is feasible only when blockSize is
+// divisible by 2^po and the resulting partition length is at least predOrder and
+// nonzero (the contiguous prefix property). It depends only on these three ints,
+// not on the residual values.
+func feasiblePmax(blockSize, predOrder, maxPartOrder int) int {
+	pmax := 0
+	for po := 1; po <= maxPartOrder; po++ {
+		if blockSize%(1<<po) != 0 {
+			break
+		}
+		partLen := blockSize >> po
+		if partLen < predOrder || partLen == 0 {
+			break
+		}
+		pmax = po
+	}
+	return pmax
+}
+
 // planPartition picks the cheapest coding for the zigzag values in zz.
 func planPartition(zz []uint64) partPlan {
 	k, riceBitCount := bestParam(zz)
@@ -113,14 +162,11 @@ func riceBits(zz []uint64, k int) int64 {
 
 // EncodeResidual writes the partitioned Rice residual for res (the blockSize-
 // predOrder residuals that follow the warmup samples) and returns the number of
-// bits written (excluding any byte-alignment padding).
-func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPartOrder int) int {
-	zz := make([]uint64, len(res))
-	for i, r := range res {
-		zz[i] = zigzag(r)
-	}
-
-	po, plans, paramBits, _ := planResidual(zz, blockSize, predOrder, maxPartOrder)
+// bits written (excluding any byte-alignment padding). The caller supplies sc;
+// the chosen plan aliases sc.plans, so no other rice call may run between the
+// PlanResidualInt32 below and the write loop.
+func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
+	po, plans, paramBits, _ := PlanResidualInt32(res, blockSize, predOrder, maxPartOrder, sc)
 
 	method := method4bit
 	escapeCode := uint64(escape4)
@@ -141,7 +187,7 @@ func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPart
 		if p == 0 {
 			n -= predOrder
 			if n < 0 {
-				// planResidual never selects an order where the first partition is
+				// PlanResidualInt32 never selects an order where the first partition is
 				// shorter than predOrder; this guards a future predictor (LPC) whose
 				// order could exceed a tiny partition length.
 				n = 0
@@ -159,7 +205,7 @@ func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPart
 			k := uint(pl.param)
 			bw.WriteBits(uint64(pl.param), uint(paramBits))
 			for i := range n {
-				u := zz[idx+i]
+				u := zigzag(res[idx+i])
 				bw.WriteUnary(u >> k)
 				bw.WriteBits(u&((uint64(1)<<k)-1), k)
 			}
@@ -171,24 +217,16 @@ func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPart
 
 // CostResidual returns the number of bits EncodeResidual would write for res,
 // without actually writing to any buffer. It runs the identical planning path.
-func CostResidual(res []int32, blockSize, predOrder, maxPartOrder int) int {
-	zz := make([]uint64, len(res))
-	for i, r := range res {
-		zz[i] = zigzag(r)
-	}
-	_, _, _, total := planResidual(zz, blockSize, predOrder, maxPartOrder)
+func CostResidual(res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
+	_, _, _, total := PlanResidualInt32(res, blockSize, predOrder, maxPartOrder, sc)
 	return total
 }
 
 // EncodeResidual64 is the int64-residual analogue of EncodeResidual, for wide
-// (25-32 bps) subframes. Planning operates on the shared zz []uint64 path.
-func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPartOrder int) int {
-	zz := make([]uint64, len(res))
-	for i, r := range res {
-		zz[i] = zigzag64(r)
-	}
-
-	po, plans, paramBits, _ := planResidual(zz, blockSize, predOrder, maxPartOrder)
+// (25-32 bps) subframes. The chosen plan aliases sc.plans, so no other rice call
+// may run between the PlanResidualInt64 below and the write loop.
+func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
+	po, plans, paramBits, _ := PlanResidualInt64(res, blockSize, predOrder, maxPartOrder, sc)
 
 	method := method4bit
 	escapeCode := uint64(escape4)
@@ -209,7 +247,7 @@ func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPa
 		if p == 0 {
 			n -= predOrder
 			if n < 0 {
-				// planResidual never selects an order where the first partition is
+				// PlanResidualInt64 never selects an order where the first partition is
 				// shorter than predOrder; this guards a future predictor (LPC) whose
 				// order could exceed a tiny partition length.
 				n = 0
@@ -227,7 +265,7 @@ func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPa
 			k := uint(pl.param)
 			bw.WriteBits(uint64(pl.param), uint(paramBits))
 			for i := range n {
-				u := zz[idx+i]
+				u := zigzag64(res[idx+i])
 				bw.WriteUnary(u >> k)
 				bw.WriteBits(u&((uint64(1)<<k)-1), k)
 			}
@@ -238,36 +276,29 @@ func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPa
 }
 
 // CostResidual64 returns the bits EncodeResidual64 would write for res.
-func CostResidual64(res []int64, blockSize, predOrder, maxPartOrder int) int {
-	zz := make([]uint64, len(res))
-	for i, r := range res {
-		zz[i] = zigzag64(r)
-	}
-	_, _, _, total := planResidual(zz, blockSize, predOrder, maxPartOrder)
+func CostResidual64(res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
+	_, _, _, total := PlanResidualInt64(res, blockSize, predOrder, maxPartOrder, sc)
 	return total
 }
 
-// planResidual chooses the partition order and per-partition coding that minimize
-// the Rice payload for the zigzag residuals zz, using the libFLAC merge-upward
-// search: per-partition sums are computed once at the finest feasible order and
-// merged upward, instead of rescanning zz once per partition order. It is a
-// decision-for-decision reformulation of the older per-order rescan search,
-// which the pcm byte-identical golden test guards against any drift.
-func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO int, bestPlans []partPlan, paramBits, totalBits int) {
-	// pmax: largest feasible order (contiguous prefix property, see Task 1 notes).
-	pmax := 0
-	for po := 1; po <= maxPartOrder; po++ {
-		if blockSize%(1<<po) != 0 {
-			break
-		}
-		partLen := blockSize >> po
-		if partLen < predOrder || partLen == 0 {
-			break
-		}
-		pmax = po
-	}
+// PlanResidualInt32 zigzags res internally and runs the libFLAC merge-upward
+// search, writing the chosen plan into sc.plans. It returns the partition order,
+// the plan (aliased into sc.plans, valid until the next call on the same Scratch),
+// the param-field width, and the total payload bits. Per-partition sums are
+// computed once at the finest feasible order and merged upward, instead of
+// rescanning the residuals once per partition order; this is a decision-for-
+// decision reformulation of the older per-order rescan search, which the pcm
+// byte-identical golden test guards against any drift.
+//
+//nolint:dupl // intentional: typed parallel of PlanResidualInt64
+func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []partPlan, paramBits, totalBits int) {
+	pmax := feasiblePmax(blockSize, predOrder, maxPartOrder)
 	// Guard: po==0 itself must be feasible; otherwise fall back like the reference.
 	if blockSize-predOrder < 0 || blockSize == 0 {
+		zz := make([]uint64, len(res))
+		for i, r := range res {
+			zz[i] = zigzag(r)
+		}
 		return riceFallbackPlan(zz)
 	}
 
@@ -275,7 +306,8 @@ func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO i
 	// over the whole block, so ncols = min(maxParam5, globalRaw+2)+1 covers every
 	// query while keeping the finest pass cheap for quiet signals.
 	var globalMaxU uint64
-	for _, u := range zz {
+	for _, r := range res {
+		u := zigzag(r)
 		if u > globalMaxU {
 			globalMaxU = u
 		}
@@ -286,14 +318,59 @@ func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO i
 	}
 	ncols := kHi + 1
 
-	// Finest-order tables: one row of ncols sums plus one maxU per partition.
-	sums, maxU := buildFinestTables(zz, blockSize, predOrder, pmax, kHi, ncols)
+	P := 1 << pmax
+	sc.ensure(P, ncols)
+	clear(sc.sums[:P*ncols]) // sums is accumulated with += and reused, so zero it first.
+	buildFinestTablesInt32(sc, res, blockSize, predOrder, pmax, kHi, ncols)
 
-	// Evaluate each order pmax..0, merging upward as we descend.
+	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
+}
+
+// PlanResidualInt64 is the wide-path analogue of PlanResidualInt32 (zigzag64).
+//
+//nolint:dupl // intentional: typed parallel of PlanResidualInt32
+func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []partPlan, paramBits, totalBits int) {
+	pmax := feasiblePmax(blockSize, predOrder, maxPartOrder)
+	if blockSize-predOrder < 0 || blockSize == 0 {
+		zz := make([]uint64, len(res))
+		for i, r := range res {
+			zz[i] = zigzag64(r)
+		}
+		return riceFallbackPlan(zz)
+	}
+
+	var globalMaxU uint64
+	for _, r := range res {
+		u := zigzag64(r)
+		if u > globalMaxU {
+			globalMaxU = u
+		}
+	}
+	kHi := bits.Len64(globalMaxU) + 2
+	if kHi > maxParam5 {
+		kHi = maxParam5
+	}
+	ncols := kHi + 1
+
+	P := 1 << pmax
+	sc.ensure(P, ncols)
+	clear(sc.sums[:P*ncols]) // sums is accumulated with += and reused, so zero it first.
+	buildFinestTablesInt64(sc, res, blockSize, predOrder, pmax, kHi, ncols)
+
+	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
+}
+
+// planFromTables runs the order-selection over the finest-order tables already
+// built into sc.sums/sc.maxU. It is type-independent: the only type-specific work
+// (zigzag of the residuals) happened in buildFinestTables*. It descends pmax..0,
+// merging upward between orders, and copies the winning order's plans into
+// sc.plans via a separate working buffer (sc.cur) so a later, smaller order
+// cannot overwrite the chosen plans before they are returned.
+func planFromTables(sc *Scratch, blockSize, predOrder, pmax, kHi, ncols int) (bestPO int, plans []partPlan, paramBits, totalBits int) {
 	totalBits = int(^uint(0) >> 1)
 	for po := pmax; po >= 0; po-- {
 		parts := 1 << po
-		pl := make([]partPlan, parts)
+		cur := sc.cur[:parts]
 		maxK := 0
 		sumPayload := 0
 		for p := range parts {
@@ -301,11 +378,11 @@ func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO i
 			if p == 0 {
 				n -= predOrder
 			}
-			pl[p] = choosePartition(sums[p*ncols:p*ncols+ncols], maxU[p], n, kHi)
-			if !pl[p].escape && pl[p].param > maxK {
-				maxK = pl[p].param
+			cur[p] = choosePartition(sc.sums[p*ncols:p*ncols+ncols], sc.maxU[p], n, kHi)
+			if !cur[p].escape && cur[p].param > maxK {
+				maxK = cur[p].param
 			}
-			sumPayload += pl[p].payload
+			sumPayload += cur[p].payload
 		}
 		pb := 4
 		if maxK > maxParam4 {
@@ -313,14 +390,15 @@ func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO i
 		}
 		total := 2 + 4 + parts*pb + sumPayload
 		if total <= totalBits { // <= so the smallest order wins on ties (we descend)
-			totalBits, bestPO, bestPlans, paramBits = total, po, pl, pb
+			totalBits, bestPO, paramBits = total, po, pb
+			sc.plans = append(sc.plans[:0], cur...)
 		}
 		// Merge adjacent partition pairs into the next coarser table (in place).
 		if po > 0 {
-			mergeUpward(sums, maxU, parts, ncols)
+			mergeUpward(sc.sums, sc.maxU, parts, ncols)
 		}
 	}
-	return bestPO, bestPlans, paramBits, totalBits
+	return bestPO, sc.plans, paramBits, totalBits
 }
 
 // riceFallbackPlan reproduces planResidualReference's order-0 single-partition
@@ -337,14 +415,15 @@ func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []partPlan, paramBits,
 	return 0, []partPlan{pl}, paramBits, 2 + 4 + paramBits + pl.payload
 }
 
-// buildFinestTables computes, for the finest feasible partition order pmax, the
-// per-partition sums table (sums[p*ncols+k] = sum of u>>k over the partition, for
-// k in 0..kHi) and the per-partition maxU. These tables are merged upward by
-// mergeUpward as planResidual descends through coarser orders.
-func buildFinestTables(zz []uint64, blockSize, predOrder, pmax, kHi, ncols int) (sums, maxU []uint64) {
+// buildFinestTablesInt32 computes, for the finest feasible partition order pmax,
+// the per-partition sums table (sc.sums[p*ncols+k] = sum of u>>k over the
+// partition, for k in 0..kHi) and the per-partition max zigzag (sc.maxU), reading
+// residuals from res and zigzagging on the fly. sc.sums must be zeroed by the
+// caller (it accumulates with +=); sc.maxU entries are fully assigned per
+// partition and need no pre-zeroing. These tables are merged upward by mergeUpward
+// as planFromTables descends through coarser orders.
+func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, kHi, ncols int) {
 	P := 1 << pmax
-	sums = make([]uint64, P*ncols) // sums[p*ncols + k]
-	maxU = make([]uint64, P)
 	partLen := blockSize >> pmax
 	idx := 0
 	for p := range P {
@@ -355,19 +434,45 @@ func buildFinestTables(zz []uint64, blockSize, predOrder, pmax, kHi, ncols int) 
 		base := p * ncols
 		var mu uint64
 		for j := range n {
-			u := zz[idx+j]
+			u := zigzag(res[idx+j])
 			if u > mu {
 				mu = u
 			}
 			// sums[k] += u>>k for k in 0..kHi
 			for k := 0; k <= kHi; k++ {
-				sums[base+k] += u >> uint(k)
+				sc.sums[base+k] += u >> uint(k)
 			}
 		}
-		maxU[p] = mu
+		sc.maxU[p] = mu
 		idx += n
 	}
-	return sums, maxU
+}
+
+// buildFinestTablesInt64 is the wide-path analogue of buildFinestTablesInt32,
+// reading int64 residuals and zigzagging with zigzag64.
+func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax, kHi, ncols int) {
+	P := 1 << pmax
+	partLen := blockSize >> pmax
+	idx := 0
+	for p := range P {
+		n := partLen
+		if p == 0 {
+			n -= predOrder
+		}
+		base := p * ncols
+		var mu uint64
+		for j := range n {
+			u := zigzag64(res[idx+j])
+			if u > mu {
+				mu = u
+			}
+			for k := 0; k <= kHi; k++ {
+				sc.sums[base+k] += u >> uint(k)
+			}
+		}
+		sc.maxU[p] = mu
+		idx += n
+	}
 }
 
 // mergeUpward folds the current order's parts partitions into parts/2 coarser
