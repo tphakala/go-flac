@@ -323,7 +323,8 @@ func (e *Encoder) Close() error {
 // paramsForLevel maps a compression level (clamped to 0..8) to frame parameters.
 // Levels 0..2 use fixed predictors only (MaxLPCOrder = 0). Levels 3..8 enable
 // LPC with increasing max order, matching libFLAC's -l values: l3=6, l4-6=8, l7-8=12.
-// Levels 7 and 8 share all parameters in M3b (subdivide_tukey is deferred to M4).
+// Levels 7 and 8 currently share all parameters (subdivide_tukey apodization,
+// which distinguishes them in libFLAC, is future work).
 func paramsForLevel(level int) frame.Params {
 	if level < 0 {
 		level = 0

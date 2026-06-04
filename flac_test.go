@@ -25,15 +25,6 @@ func TestStreamInfoZeroValue(t *testing.T) {
 	}
 }
 
-func TestEncoderSentinelDistinct(t *testing.T) {
-	if flac.ErrEncoderClosed == nil {
-		t.Fatal("ErrEncoderClosed is nil")
-	}
-	if errors.Is(flac.ErrEncoderClosed, flac.ErrNotImplemented) {
-		t.Error("ErrEncoderClosed aliases ErrNotImplemented")
-	}
-}
-
 func TestM4Sentinels(t *testing.T) {
 	for _, e := range []error{flac.ErrTruncatedStream, flac.ErrInvalidSeek} {
 		if e == nil {
@@ -54,6 +45,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 	errs := []error{
 		flac.ErrSeekUnsupported, flac.ErrMissingStreamInfo,
 		flac.ErrCRCMismatch, flac.ErrMD5Mismatch, flac.ErrUnsupported,
+		flac.ErrEncoderClosed, flac.ErrTruncatedStream, flac.ErrInvalidSeek,
 	}
 	for i := range errs {
 		if errs[i] == nil {
