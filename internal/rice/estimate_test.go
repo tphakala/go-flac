@@ -45,3 +45,14 @@ func TestEstimateRiceBitsZeroAlloc(t *testing.T) {
 		t.Fatalf("EstimateRiceBits/ZigzagSum allocated %v times", a)
 	}
 }
+
+func TestZigzagSum64MatchesScalar(t *testing.T) {
+	res := []int64{0, 1, -1, 2, -2, 1000, -1000, 1 << 40, -(1 << 40)}
+	var want uint64
+	for _, r := range res {
+		want += zigzag64(r)
+	}
+	if got := ZigzagSum64(res); got != want {
+		t.Fatalf("ZigzagSum64=%d want %d", got, want)
+	}
+}

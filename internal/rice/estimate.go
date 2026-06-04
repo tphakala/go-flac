@@ -2,6 +2,16 @@ package rice
 
 import "math/bits"
 
+// ZigzagSum64 returns the sum over j of zigzag64(res[j]); the int64 analogue of
+// ZigzagSum, used to rank wide-path (25-32 bps) candidates. Allocation-free.
+func ZigzagSum64(res []int64) uint64 {
+	var s uint64
+	for _, r := range res {
+		s += zigzag64(r)
+	}
+	return s
+}
+
 // ZigzagSum returns the sum over j of zigzag(res[j]). zigzag maps signed
 // residuals to the unsigned magnitudes the Rice coder counts (zigzag(r) is
 // approximately 2|r|). Pure-Go reference; a SIMD kernel replaces the body in a

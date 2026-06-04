@@ -96,46 +96,45 @@ func FixedAbsSums(src []int32, sums *[5]uint64) {
 	}
 }
 
+// FixedAbsSums64 is the int64 analogue of FixedAbsSums: it fills sums[order] with
+// the sum of |residual| of the order-th fixed predictor (order 0..4) in a single
+// pass, excluding the first `order` warmup samples. The body is replaced by a SIMD
+// kernel in a later task; this scalar form is the reference. Allocation-free.
+func FixedAbsSums64(src []int64, sums *[5]uint64) {
+	*sums = [5]uint64{}
+	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
+	for i, v := range src {
+		e0 := v
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e4 := e3 - p4
+		sums[0] += absU64(e0)
+		if i >= 1 {
+			sums[1] += absU64(e1)
+		}
+		if i >= 2 {
+			sums[2] += absU64(e2)
+		}
+		if i >= 3 {
+			sums[3] += absU64(e3)
+		}
+		if i >= 4 {
+			sums[4] += absU64(e4)
+		}
+		p1, p2, p3, p4 = e0, e1, e2, e3
+	}
+}
+
 // absU64 returns the magnitude of v as a uint64. It is correct for the entire
 // int64 range, including math.MinInt64 (wrapping negation then a uint64 cast
 // yields the right bit pattern). Callers feeding finite differences must ensure
 // those differences do not overflow int64 first; for FLAC's max 32-bit samples
 // the order-4 difference is bounded near 2^35, so this holds for FixedAbsSums
-// and the future FixedAbsSums64 (whose int64 inputs are 32-bit sample values).
+// and FixedAbsSums64 (whose int64 inputs are 32-bit sample values).
 func absU64(v int64) uint64 {
 	if v < 0 {
 		return uint64(-v)
 	}
 	return uint64(v)
-}
-
-// BestFixedOrder64 is the int64 analogue of BestFixedOrder.
-func BestFixedOrder64(src []int64, maxOrder int) int {
-	if maxOrder > 4 {
-		maxOrder = 4
-	}
-	if maxOrder > len(src)-1 {
-		maxOrder = len(src) - 1
-	}
-	if maxOrder < 0 {
-		return 0
-	}
-	bestOrder, bestSum := 0, int64(-1)
-	res := make([]int64, len(src))
-	for order := range maxOrder + 1 {
-		r := res[:len(src)-order]
-		ComputeFixedResiduals64(r, src, order)
-		var sum int64
-		for _, v := range r {
-			if v < 0 {
-				sum -= v
-			} else {
-				sum += v
-			}
-		}
-		if bestSum < 0 || sum < bestSum {
-			bestSum, bestOrder = sum, order
-		}
-	}
-	return bestOrder
 }

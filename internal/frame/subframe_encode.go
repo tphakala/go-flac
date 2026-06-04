@@ -305,15 +305,21 @@ func shiftRight64(s []int64, wasted int) []int64 {
 	return out
 }
 
-// chooseFixedOrder64 returns the fixed predictor order to use for shifted together
-// with the Rice cost (in bits) of that order's residuals. Mirrors chooseFixedOrder
-// but operates on int64 samples for wide bit-depth support.
+// chooseFixedOrder64 selects the fixed predictor order by estimated Rice cost
+// (abs-sum of each order's residual) and returns that estimate. The winning
+// subframe's residual is priced exactly by PlanResidualInt64 in planSubframe64,
+// so this estimate only ranks candidates. ExhaustiveFixed, when set, prices every
+// order with a full Rice search for a marginally tighter pick. Mirrors
+// chooseFixedOrder but operates on int64 samples for wide bit-depth support.
 //
-//nolint:dupl // intentional: typed parallel of chooseFixedOrder
+//nolint:dupl // int64 parallel of chooseFixedOrder
 func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBits int) {
+	maxOrder := min(4, len(shifted)-1)
+	if maxOrder < 0 {
+		return 0, 0
+	}
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
-		maxOrder := min(4, len(shifted)-1)
 		res := ws.ensureCostRes64(len(shifted)) // reused across orders
 		for o := 0; o <= maxOrder; o++ {
 			r := res[:len(shifted)-o]
@@ -325,15 +331,25 @@ func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBit
 		}
 		return bestOrder, bestBits
 	}
-	order = lpc.BestFixedOrder64(shifted, 4)
-	res := ws.ensureCostRes64(len(shifted) - order)
-	lpc.ComputeFixedResiduals64(res, shifted, order)
-	return order, rice.CostResidual64(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
+	var sums [5]uint64
+	lpc.FixedAbsSums64(shifted, &sums)
+	bestOrder, bestBits := 0, int(^uint(0)>>1)
+	for o := 0; o <= maxOrder; o++ {
+		// zigzag is approximately 2|r|; EstimateRiceBits wants the sum of zigzag, so
+		// double the abs-sum.
+		b := rice.EstimateRiceBits(2*sums[o], len(shifted)-o)
+		if b < bestBits {
+			bestBits, bestOrder = b, o
+		}
+	}
+	return bestOrder, bestBits
 }
 
 // chooseLPCPlan64 runs LPC analysis on the wasted-bits-shifted int64 samples and,
 // if applicable, returns the chosen order, its quantized coefficients and shift,
-// and the exact Rice residual cost. Mirrors chooseLPCPlan for wide bit-depth support.
+// and the Rice residual cost: exact when ExhaustiveFixed, estimated otherwise (the
+// residual cost only; the warmup, coeff, precision and shift field bits are added
+// by the caller). Mirrors chooseLPCPlan for wide bit-depth support.
 func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window []float64) (order int, qcoeff [32]int32, shift, resBits int, ok bool) {
 	var qc [32]int32
 	o, sh, _, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff, ws.lpcScratch(len(shifted)), qc[:])
@@ -342,7 +358,15 @@ func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window [
 	}
 	res := ws.ensureCostRes64(len(shifted) - o)
 	lpc.ComputeLPCResiduals64(res, shifted, qc[:o], sh, o)
-	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
+	// res holds the residual with NO warmup prefix (length len-o), so estimate over
+	// ALL of res (do not slice res[o:]). Price on the same basis as
+	// chooseFixedOrder64: exact under ExhaustiveFixed, estimate otherwise.
+	if p.ExhaustiveFixed {
+		resBits = rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
+	} else {
+		resBits = rice.EstimateRiceBits(rice.ZigzagSum64(res), len(shifted)-o)
+	}
+	return o, qc, sh, resBits, true
 }
 
 // writeConstant64 writes a FLAC constant subframe for int64 samples.
@@ -444,16 +468,18 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 		c := &ws.cand[idx]
 		res := c.ensureRes64(len(s) - best.order)
 		lpc.ComputeFixedResiduals64(res, shifted, best.order)
-		_, plans, paramBits, _ := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
+		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
+		best.bits = hdrBits + best.order*eff + total
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes64(len(s) - best.order)
 		lpc.ComputeLPCResiduals64(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
-		_, plans, paramBits, _ := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
+		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
+		best.bits = hdrBits + best.order*eff + 4 + 5 + best.order*p.LPCPrecision + total
 	}
 	return best
 }
