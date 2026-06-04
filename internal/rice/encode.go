@@ -310,18 +310,27 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 		for i, r := range res {
 			zz[i] = zigzag(r)
 		}
-		return riceFallbackPlan(zz)
+		return riceFallbackPlan(sc, zz)
 	}
 
 	// Column count: only k in [est-1, est+2] is ever read, and est <= bits.Len64(maxU)
 	// over the whole block, so ncols = min(maxParam5, globalRaw+2)+1 covers every
-	// query while keeping the finest pass cheap for quiet signals.
+	// query while keeping the finest pass cheap for quiet signals. zigzag is V-shaped
+	// (minimized at 0, monotonic in magnitude on each side), so the largest zigzag in
+	// res is reached at the most-negative or most-positive residual; finding those two
+	// extremes and zigzagging only them avoids a zigzag call per residual.
 	var globalMaxU uint64
-	for _, r := range res {
-		u := zigzag(r)
-		if u > globalMaxU {
-			globalMaxU = u
+	if len(res) > 0 {
+		lo, hi := res[0], res[0]
+		for _, r := range res {
+			if r < lo {
+				lo = r
+			}
+			if r > hi {
+				hi = r
+			}
 		}
+		globalMaxU = max(zigzag(lo), zigzag(hi))
 	}
 	kHi := bits.Len64(globalMaxU) + 2
 	if kHi > maxParam5 {
@@ -347,15 +356,23 @@ func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *
 		for i, r := range res {
 			zz[i] = zigzag64(r)
 		}
-		return riceFallbackPlan(zz)
+		return riceFallbackPlan(sc, zz)
 	}
 
+	// See PlanResidualInt32: the largest zigzag64 in res is at the extreme residuals,
+	// so zigzag only the min and max instead of every element.
 	var globalMaxU uint64
-	for _, r := range res {
-		u := zigzag64(r)
-		if u > globalMaxU {
-			globalMaxU = u
+	if len(res) > 0 {
+		lo, hi := res[0], res[0]
+		for _, r := range res {
+			if r < lo {
+				lo = r
+			}
+			if r > hi {
+				hi = r
+			}
 		}
+		globalMaxU = max(zigzag64(lo), zigzag64(hi))
 	}
 	kHi := bits.Len64(globalMaxU) + 2
 	if kHi > maxParam5 {
@@ -414,7 +431,7 @@ func planFromTables(sc *Scratch, blockSize, predOrder, pmax, kHi, ncols int) (be
 
 // riceFallbackPlan reproduces planResidualReference's order-0 single-partition
 // fallback for blocks where no partition order (not even order 0) is feasible.
-func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []PartPlan, paramBits, totalBits int) {
+func riceFallbackPlan(sc *Scratch, zz []uint64) (bestPO int, bestPlans []PartPlan, paramBits, totalBits int) {
 	var pl PartPlan
 	if len(zz) > 0 {
 		pl = planPartition(zz)
@@ -423,7 +440,13 @@ func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []PartPlan, paramBits,
 	if !pl.escape && pl.param > maxParam4 {
 		paramBits = 5
 	}
-	return 0, []PartPlan{pl}, paramBits, 2 + 4 + paramBits + pl.payload
+	// Write the single-partition plan into the caller-owned scratch and return that
+	// slice, so the result aliases sc.plans like the normal path (honoring the
+	// PlanResidualInt* contract). This degenerate path is unreachable from the
+	// encoder (predOrder is always < blockSize), so the cost is irrelevant; the
+	// alias is purely for contract consistency.
+	sc.plans = append(sc.plans[:0], pl)
+	return 0, sc.plans, paramBits, 2 + 4 + paramBits + pl.payload
 }
 
 // buildFinestTablesInt32 computes, for the finest feasible partition order pmax,

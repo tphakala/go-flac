@@ -277,6 +277,17 @@ func AnalyzeLPC[T Sample](samples []T, window []float64, maxOrder, precision, ef
 	if mo < 1 {
 		return 0, 0, 0, false
 	}
+	// Validate the caller-owned buffers before slicing them. The encoder always
+	// passes a NewScratch-sized Scratch (sized to its configured maxBlock/maxOrder)
+	// and a 32-element qOut, so this never trips in practice; it stops a nil or
+	// undersized buffer from panicking on the slices below, matching the function's
+	// other "not applicable" guards.
+	if sc == nil || sc.maxOrder < mo || len(qOut) < mo ||
+		len(sc.windowed) < n || len(sc.autoc) < mo+1 ||
+		len(sc.lpcWork) < mo || len(sc.errByOrder) < mo+1 ||
+		len(sc.lpcFlat) < (mo+1)*sc.maxOrder {
+		return 0, 0, 0, false
+	}
 
 	windowed := sc.windowed[:n]
 	for i := range windowed {

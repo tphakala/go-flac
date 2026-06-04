@@ -185,6 +185,39 @@ func (ws *Workspace) ensureShifted64(n int) []int64 {
 	return ws.shifted64[:n]
 }
 
+// ensureSide / ensureMid / ensureSide64 / ensureMid64 grow the stereo
+// decorrelation buffers to hold at least n samples and return the n-length
+// prefix. Like the other ensure* accessors they are defensive against a
+// zero-value Workspace; NewWorkspace pre-sizes all four to maxBlock, so the
+// steady-state encoder never reallocates here.
+func (ws *Workspace) ensureSide(n int) []int32 {
+	if cap(ws.side) < n {
+		ws.side = make([]int32, n)
+	}
+	return ws.side[:n]
+}
+
+func (ws *Workspace) ensureMid(n int) []int32 {
+	if cap(ws.mid) < n {
+		ws.mid = make([]int32, n)
+	}
+	return ws.mid[:n]
+}
+
+func (ws *Workspace) ensureSide64(n int) []int64 {
+	if cap(ws.side64) < n {
+		ws.side64 = make([]int64, n)
+	}
+	return ws.side64[:n]
+}
+
+func (ws *Workspace) ensureMid64(n int) []int64 {
+	if cap(ws.mid64) < n {
+		ws.mid64 = make([]int64, n)
+	}
+	return ws.mid64[:n]
+}
+
 // ensureL64 grows ws.l64 to hold at least n int64 samples and returns the
 // n-length prefix. Defensive against a zero-value Workspace; NewWorkspace
 // pre-sizes l64 so the steady-state encoder never allocates.

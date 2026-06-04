@@ -72,8 +72,8 @@ const (
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo64
 func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r []int32, frameNum uint64) {
-	side := ws.side[:bs]
-	mid := ws.mid[:bs]
+	side := ws.ensureSide(bs)
+	mid := ws.ensureMid(bs)
 	for i := range l {
 		side[i] = l[i] - r[i]
 		mid[i] = (l[i] + r[i]) >> 1
@@ -142,8 +142,8 @@ func finishFrame(bw *bitio.Writer) {
 func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
 	l := ws.ensureL64(bs)
 	r := ws.ensureR64(bs)
-	side := ws.side64[:bs]
-	mid := ws.mid64[:bs]
+	side := ws.ensureSide64(bs)
+	mid := ws.ensureMid64(bs)
 	// Upcast and decorrelate in a single pass over the block.
 	for i := range bs {
 		li, ri := int64(l32[i]), int64(r32[i])
