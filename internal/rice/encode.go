@@ -332,7 +332,7 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 	P := 1 << pmax
 	sc.ensure(P, ncols)
 	clear(sc.sums[:P*ncols]) // sums is accumulated with += and reused, so zero it first.
-	buildFinestTablesInt32(sc, res, blockSize, predOrder, pmax, kHi, ncols)
+	buildFinestTablesInt32(sc, res, blockSize, predOrder, pmax, ncols)
 
 	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
 }
@@ -366,7 +366,7 @@ func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *
 	P := 1 << pmax
 	sc.ensure(P, ncols)
 	clear(sc.sums[:P*ncols]) // sums is accumulated with += and reused, so zero it first.
-	buildFinestTablesInt64(sc, res, blockSize, predOrder, pmax, kHi, ncols)
+	buildFinestTablesInt64(sc, res, blockSize, predOrder, pmax, ncols)
 
 	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
 }
@@ -433,7 +433,7 @@ func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []PartPlan, paramBits,
 // caller (it accumulates with +=); sc.maxU entries are fully assigned per
 // partition and need no pre-zeroing. These tables are merged upward by mergeUpward
 // as planFromTables descends through coarser orders.
-func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, kHi, ncols int) {
+func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, ncols int) {
 	P := 1 << pmax
 	partLen := blockSize >> pmax
 	idx := 0
@@ -442,16 +442,19 @@ func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax
 		if p == 0 {
 			n -= predOrder
 		}
-		base := p * ncols
+		// row aliases this partition's sums columns (ncols == kHi+1); hoisting the
+		// slice out of the per-residual loop and ranging over it drops the per-element
+		// bounds check on row[k], and the & 63 mask drops the oversized-shift guard
+		// (k is always <= kHi <= maxParam5 = 30). Byte-identical to sums[base+k] += u>>k.
+		row := sc.sums[p*ncols : p*ncols+ncols]
 		var mu uint64
 		for j := range n {
 			u := zigzag(res[idx+j])
 			if u > mu {
 				mu = u
 			}
-			// sums[k] += u>>k for k in 0..kHi
-			for k := 0; k <= kHi; k++ {
-				sc.sums[base+k] += u >> uint(k)
+			for k := range row {
+				row[k] += u >> (uint(k) & 63)
 			}
 		}
 		sc.maxU[p] = mu
@@ -461,7 +464,7 @@ func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax
 
 // buildFinestTablesInt64 is the wide-path analogue of buildFinestTablesInt32,
 // reading int64 residuals and zigzagging with zigzag64.
-func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax, kHi, ncols int) {
+func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax, ncols int) {
 	P := 1 << pmax
 	partLen := blockSize >> pmax
 	idx := 0
@@ -470,15 +473,17 @@ func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax
 		if p == 0 {
 			n -= predOrder
 		}
-		base := p * ncols
+		// See buildFinestTablesInt32: row slice + & 63 mask drop the bounds check and
+		// oversized-shift guard from this hot loop. Byte-identical.
+		row := sc.sums[p*ncols : p*ncols+ncols]
 		var mu uint64
 		for j := range n {
 			u := zigzag64(res[idx+j])
 			if u > mu {
 				mu = u
 			}
-			for k := 0; k <= kHi; k++ {
-				sc.sums[base+k] += u >> uint(k)
+			for k := range row {
+				row[k] += u >> (uint(k) & 63)
 			}
 		}
 		sc.maxU[p] = mu
