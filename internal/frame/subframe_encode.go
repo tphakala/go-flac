@@ -239,9 +239,9 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 
 // chooseLPCPlan runs LPC analysis on the wasted-bits-shifted samples and, if
 // applicable, returns the chosen order, its quantized coefficients and shift,
-// and the exact Rice residual cost (the residual cost only; the warmup, coeff,
-// precision and shift field bits are added by the caller). ok is false when LPC
-// is not applicable for this subframe.
+// and the Rice residual cost: exact when ExhaustiveFixed, estimated otherwise
+// (the residual cost only; the warmup, coeff, precision and shift field bits are
+// added by the caller). ok is false when LPC is not applicable for this subframe.
 func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []float64) (order int, qcoeff [32]int32, shift, resBits int, ok bool) {
 	var qc [32]int32
 	o, sh, _, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff, ws.lpcScratch(len(shifted)), qc[:])
@@ -255,7 +255,15 @@ func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []f
 	// correctness anchor.
 	res := ws.ensureCostRes(len(shifted))
 	lpc.LPCResidualsEncode(res, shifted, qc[:o], sh)
-	return o, qc, sh, rice.CostResidual(res[o:len(shifted)], len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
+	r := res[o:len(shifted)] // LPCResidualsEncode writes [warmup|residual]; residual is res[o:]
+	// Price LPC on the SAME basis as chooseFixedOrder so the fixed-vs-LPC choice
+	// is fair: exact under ExhaustiveFixed, estimate otherwise.
+	if p.ExhaustiveFixed {
+		resBits = rice.CostResidual(r, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
+	} else {
+		resBits = rice.EstimateRiceBits(rice.ZigzagSum(r), len(shifted)-o)
+	}
+	return o, qc, sh, resBits, true
 }
 
 // wastedBits64 returns the number of low-order zero bits common to every sample.
