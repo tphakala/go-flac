@@ -247,70 +247,184 @@ func CostResidual64(res []int64, blockSize, predOrder, maxPartOrder int) int {
 	return total
 }
 
-// planResidual searches partition orders 0..maxPartOrder, returns the best order,
-// per-partition plans, parameter field width (4 or 5), and total bits
-// (2 method + 4 order + sum of paramBits + payload per partition).
+// planResidual chooses the partition order and per-partition coding that minimize
+// the Rice payload for the zigzag residuals zz, using the libFLAC merge-upward
+// search: per-partition sums are computed once at the finest feasible order and
+// merged upward, instead of rescanning zz once per partition order. It is a
+// decision-for-decision reformulation of the older per-order rescan search,
+// which the pcm byte-identical golden test guards against any drift.
 func planResidual(zz []uint64, blockSize, predOrder, maxPartOrder int) (bestPO int, bestPlans []partPlan, paramBits, totalBits int) {
+	// pmax: largest feasible order (contiguous prefix property, see Task 1 notes).
+	pmax := 0
+	for po := 1; po <= maxPartOrder; po++ {
+		if blockSize%(1<<po) != 0 {
+			break
+		}
+		partLen := blockSize >> po
+		if partLen < predOrder || partLen == 0 {
+			break
+		}
+		pmax = po
+	}
+	// Guard: po==0 itself must be feasible; otherwise fall back like the reference.
+	if blockSize-predOrder < 0 || blockSize == 0 {
+		return riceFallbackPlan(zz)
+	}
+
+	// Column count: only k in [est-1, est+2] is ever read, and est <= bits.Len64(maxU)
+	// over the whole block, so ncols = min(maxParam5, globalRaw+2)+1 covers every
+	// query while keeping the finest pass cheap for quiet signals.
+	var globalMaxU uint64
+	for _, u := range zz {
+		if u > globalMaxU {
+			globalMaxU = u
+		}
+	}
+	kHi := bits.Len64(globalMaxU) + 2
+	if kHi > maxParam5 {
+		kHi = maxParam5
+	}
+	ncols := kHi + 1
+
+	// Finest-order tables: one row of ncols sums plus one maxU per partition.
+	sums, maxU := buildFinestTables(zz, blockSize, predOrder, pmax, kHi, ncols)
+
+	// Evaluate each order pmax..0, merging upward as we descend.
 	totalBits = int(^uint(0) >> 1)
-	for po := 0; po <= maxPartOrder; po++ {
-		partitions := 1 << po
-		if blockSize%partitions != 0 {
-			continue
-		}
-		partLen := blockSize / partitions
-		if partLen-predOrder < 0 {
-			continue
-		}
-		if partLen == 0 {
-			continue
-		}
-		plans := make([]partPlan, partitions)
+	for po := pmax; po >= 0; po-- {
+		parts := 1 << po
+		pl := make([]partPlan, parts)
 		maxK := 0
 		sumPayload := 0
-		idx := 0
-		ok := true
-		for p := range partitions {
-			n := partLen
+		for p := range parts {
+			n := blockSize >> po
 			if p == 0 {
 				n -= predOrder
 			}
-			if n < 0 || idx+n > len(zz) {
-				ok = false
-				break
+			pl[p] = choosePartition(sums[p*ncols:p*ncols+ncols], maxU[p], n, kHi)
+			if !pl[p].escape && pl[p].param > maxK {
+				maxK = pl[p].param
 			}
-			pl := planPartition(zz[idx : idx+n])
-			plans[p] = pl
-			if !pl.escape && pl.param > maxK {
-				maxK = pl.param
-			}
-			sumPayload += pl.payload
-			idx += n
-		}
-		if !ok {
-			continue
+			sumPayload += pl[p].payload
 		}
 		pb := 4
 		if maxK > maxParam4 {
 			pb = 5
 		}
-		total := 2 + 4 + partitions*pb + sumPayload
-		if total < totalBits {
-			totalBits, bestPO, bestPlans, paramBits = total, po, plans, pb
+		total := 2 + 4 + parts*pb + sumPayload
+		if total <= totalBits { // <= so the smallest order wins on ties (we descend)
+			totalBits, bestPO, bestPlans, paramBits = total, po, pl, pb
 		}
-	}
-	if bestPlans == nil {
-		// Fallback: order 0, single partition.
-		var pl partPlan
-		if len(zz) > 0 {
-			pl = planPartition(zz)
+		// Merge adjacent partition pairs into the next coarser table (in place).
+		if po > 0 {
+			mergeUpward(sums, maxU, parts, ncols)
 		}
-		bestPlans = []partPlan{pl}
-		paramBits = 4
-		if !pl.escape && pl.param > maxParam4 {
-			paramBits = 5
-		}
-		bestPO = 0
-		totalBits = 2 + 4 + paramBits + pl.payload
 	}
 	return bestPO, bestPlans, paramBits, totalBits
+}
+
+// riceFallbackPlan reproduces planResidualReference's order-0 single-partition
+// fallback for blocks where no partition order (not even order 0) is feasible.
+func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []partPlan, paramBits, totalBits int) {
+	var pl partPlan
+	if len(zz) > 0 {
+		pl = planPartition(zz)
+	}
+	paramBits = 4
+	if !pl.escape && pl.param > maxParam4 {
+		paramBits = 5
+	}
+	return 0, []partPlan{pl}, paramBits, 2 + 4 + paramBits + pl.payload
+}
+
+// buildFinestTables computes, for the finest feasible partition order pmax, the
+// per-partition sums table (sums[p*ncols+k] = sum of u>>k over the partition, for
+// k in 0..kHi) and the per-partition maxU. These tables are merged upward by
+// mergeUpward as planResidual descends through coarser orders.
+func buildFinestTables(zz []uint64, blockSize, predOrder, pmax, kHi, ncols int) (sums, maxU []uint64) {
+	P := 1 << pmax
+	sums = make([]uint64, P*ncols) // sums[p*ncols + k]
+	maxU = make([]uint64, P)
+	partLen := blockSize >> pmax
+	idx := 0
+	for p := range P {
+		n := partLen
+		if p == 0 {
+			n -= predOrder
+		}
+		base := p * ncols
+		var mu uint64
+		for j := range n {
+			u := zz[idx+j]
+			if u > mu {
+				mu = u
+			}
+			// sums[k] += u>>k for k in 0..kHi
+			for k := 0; k <= kHi; k++ {
+				sums[base+k] += u >> uint(k)
+			}
+		}
+		maxU[p] = mu
+		idx += n
+	}
+	return sums, maxU
+}
+
+// mergeUpward folds the current order's parts partitions into parts/2 coarser
+// partitions in place: adjacent sums columns add, and the coarser maxU is the max
+// of the two finer maxU. parts is the partition count of the order just evaluated.
+func mergeUpward(sums, maxU []uint64, parts, ncols int) {
+	half := parts / 2
+	for p := range half {
+		dst := p * ncols
+		a := (2 * p) * ncols
+		b := (2*p + 1) * ncols
+		for k := range ncols {
+			sums[dst+k] = sums[a+k] + sums[b+k]
+		}
+		if maxU[2*p+1] > maxU[2*p] {
+			maxU[p] = maxU[2*p+1]
+		} else {
+			maxU[p] = maxU[2*p]
+		}
+	}
+}
+
+// choosePartition reproduces planPartition+bestParam for one partition given its
+// precomputed sums[k] table (k in 0..kHi), its maxU, and its residual count n.
+func choosePartition(sums []uint64, maxU uint64, n, kHi int) partPlan {
+	// bestParam windowed search, byte-identical to bestParam(zz).
+	est := 0
+	if n > 0 {
+		mean := sums[0] / uint64(n)
+		est = bits.Len64(mean)
+	}
+	lo, hi := est-1, est+2
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > maxParam5 {
+		hi = maxParam5
+	}
+	if lo > hi {
+		lo = hi
+	}
+	if hi > kHi {
+		hi = kHi // sums beyond kHi are unused; est+2 cannot exceed kHi by construction
+	}
+	best, bestBits := 0, int64(^uint64(0)>>1)
+	for k := lo; k <= hi; k++ {
+		b := int64(sums[k]) + int64(n)*(1+int64(k))
+		if b < bestBits {
+			bestBits, best = b, k
+		}
+	}
+	// Escape alternative, byte-identical to planPartition.
+	if raw := bits.Len64(maxU); raw <= maxRawBits {
+		escBits := 5 + raw*n
+		if int64(escBits) < bestBits {
+			return partPlan{escape: true, rawBits: raw, payload: escBits}
+		}
+	}
+	return partPlan{param: best, payload: int(bestBits)}
 }
