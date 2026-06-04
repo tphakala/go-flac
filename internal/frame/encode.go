@@ -37,7 +37,7 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 		// so upcast each channel to int64 before planning and writing.
 		window := ws.window(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
-		buf := make([]int64, bs)
+		buf := ws.ensureL64(bs) // reuse l64; never runs in same frame as encodeStereo64
 		for c := range nch {
 			for i := range bs {
 				buf[i] = int64(ch[c][i])
@@ -140,8 +140,8 @@ func finishFrame(bw *bitio.Writer) {
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo
 func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
-	l := make([]int64, bs)
-	r := make([]int64, bs)
+	l := ws.ensureL64(bs)
+	r := ws.ensureR64(bs)
 	side := ws.side64[:bs]
 	mid := ws.mid64[:bs]
 	// Upcast and decorrelate in a single pass over the block.

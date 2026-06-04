@@ -44,6 +44,10 @@ type Workspace struct {
 	// Stereo decorrelation block buffers (shared; int32 + int64 wide path).
 	side, mid     []int32
 	side64, mid64 []int64
+	// l64, r64 hold the int64 upcast of the L/R inputs for encodeStereo64. l64
+	// is also reused as the per-channel scratch for the wide-independent path in
+	// EncodeFrame; encodeStereo64 and that path never run within the same frame.
+	l64, r64 []int64
 	// Rice planning scratch reused across subframes (zigzag sums, plans).
 	rice rice.Scratch
 	// LPC analysis float64 scratch, shared across subframes. Single-use per
@@ -56,6 +60,14 @@ type Workspace struct {
 	// used to price a candidate; the winner's residuals are recomputed into the
 	// per-candidate carry buffer afterward, so reusing one buffer here is safe.
 	costRes []int32
+	// costRes64 is the int64 analogue of costRes for the wide (25-32 bps) path.
+	// Used by chooseFixedOrder64 and chooseLPCPlan64 for transient cost-eval
+	// residuals; distinct from cand[idx].res64 which carries the winner.
+	costRes64 []int64
+	// shifted64 is the wasted-bits-shifted wide sample buffer. Filled once per
+	// planSubframe64 call (when wasted > 0) and consumed before the function
+	// returns, so sharing it across the four stereo candidates is safe.
+	shifted64 []int64
 	// Apodization-window cache. Only two distinct block lengths ever occur in a
 	// stream (the full block and the shorter final block), so two slots suffice.
 	// The window is deterministic, so caching it is byte-identical to recomputing
@@ -76,12 +88,16 @@ type Workspace struct {
 func NewWorkspace(maxBlock, channels, maxOrder int) *Workspace {
 	_ = channels
 	ws := &Workspace{
-		side:    make([]int32, maxBlock),
-		mid:     make([]int32, maxBlock),
-		side64:  make([]int64, maxBlock),
-		mid64:   make([]int64, maxBlock),
-		lpc:     lpc.NewScratch(maxBlock, maxOrder),
-		costRes: make([]int32, maxBlock),
+		side:      make([]int32, maxBlock),
+		mid:       make([]int32, maxBlock),
+		side64:    make([]int64, maxBlock),
+		mid64:     make([]int64, maxBlock),
+		l64:       make([]int64, maxBlock),
+		r64:       make([]int64, maxBlock),
+		lpc:       lpc.NewScratch(maxBlock, maxOrder),
+		costRes:   make([]int32, maxBlock),
+		costRes64: make([]int64, maxBlock),
+		shifted64: make([]int64, maxBlock),
 	}
 	for i := range ws.cand {
 		ws.cand[i] = candScratch{
@@ -127,6 +143,46 @@ func (ws *Workspace) ensureCostRes(n int) []int32 {
 		ws.costRes = make([]int32, n)
 	}
 	return ws.costRes[:n]
+}
+
+// ensureCostRes64 grows ws.costRes64 to hold at least n int64 cost-eval residuals
+// and returns the n-length prefix. Defensive against a zero-value Workspace;
+// NewWorkspace pre-sizes costRes64 so the steady-state encoder never allocates.
+func (ws *Workspace) ensureCostRes64(n int) []int64 {
+	if cap(ws.costRes64) < n {
+		ws.costRes64 = make([]int64, n)
+	}
+	return ws.costRes64[:n]
+}
+
+// ensureShifted64 grows ws.shifted64 to hold at least n int64 shifted samples
+// and returns the n-length prefix. Defensive against a zero-value Workspace;
+// NewWorkspace pre-sizes shifted64 so the steady-state encoder never allocates.
+func (ws *Workspace) ensureShifted64(n int) []int64 {
+	if cap(ws.shifted64) < n {
+		ws.shifted64 = make([]int64, n)
+	}
+	return ws.shifted64[:n]
+}
+
+// ensureL64 grows ws.l64 to hold at least n int64 samples and returns the
+// n-length prefix. Defensive against a zero-value Workspace; NewWorkspace
+// pre-sizes l64 so the steady-state encoder never allocates.
+func (ws *Workspace) ensureL64(n int) []int64 {
+	if cap(ws.l64) < n {
+		ws.l64 = make([]int64, n)
+	}
+	return ws.l64[:n]
+}
+
+// ensureR64 grows ws.r64 to hold at least n int64 samples and returns the
+// n-length prefix. Defensive against a zero-value Workspace; NewWorkspace
+// pre-sizes r64 so the steady-state encoder never allocates.
+func (ws *Workspace) ensureR64(n int) []int64 {
+	if cap(ws.r64) < n {
+		ws.r64 = make([]int64, n)
+	}
+	return ws.r64[:n]
 }
 
 // lpcScratch returns the workspace LPC analysis scratch, lazily allocating it for

@@ -251,7 +251,8 @@ func allEqual64(s []int64) bool {
 }
 
 // shiftRight64 returns a new slice with every element of s shifted right by
-// wasted bits. Returns s directly when wasted is zero.
+// wasted bits. Returns s directly when wasted is zero. Used by tests; the encoder
+// hot path uses planSubframe64's inline workspace-backed shift instead.
 func shiftRight64(s []int64, wasted int) []int64 {
 	if wasted == 0 {
 		return s
@@ -272,7 +273,7 @@ func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBit
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
 		maxOrder := min(4, len(shifted)-1)
-		res := make([]int64, len(shifted))
+		res := ws.ensureCostRes64(len(shifted)) // reused across orders
 		for o := 0; o <= maxOrder; o++ {
 			r := res[:len(shifted)-o]
 			lpc.ComputeFixedResiduals64(r, shifted, o)
@@ -284,7 +285,7 @@ func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBit
 		return bestOrder, bestBits
 	}
 	order = lpc.BestFixedOrder64(shifted, 4)
-	res := make([]int64, len(shifted)-order)
+	res := ws.ensureCostRes64(len(shifted) - order)
 	lpc.ComputeFixedResiduals64(res, shifted, order)
 	return order, rice.CostResidual64(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
 }
@@ -298,8 +299,7 @@ func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window [
 	if !aok {
 		return 0, qc, 0, 0, false
 	}
-	// TODO(Task 6): route this cost-eval residual through a workspace int64 buffer.
-	res := make([]int64, len(shifted)-o)
+	res := ws.ensureCostRes64(len(shifted) - o)
 	lpc.ComputeLPCResiduals64(res, shifted, qc[:o], sh, o)
 	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
@@ -369,7 +369,15 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	if wasted > 0 {
 		hdrBits += wasted
 	}
-	shifted := shiftRight64(s, wasted)
+	var shifted []int64
+	if wasted == 0 {
+		shifted = s
+	} else {
+		shifted = ws.ensureShifted64(len(s))
+		for i, v := range s {
+			shifted[i] = v >> uint(wasted)
+		}
+	}
 
 	fOrder, fResBits := chooseFixedOrder64(ws, shifted, p)
 	fixedBits := hdrBits + fOrder*eff + fResBits
