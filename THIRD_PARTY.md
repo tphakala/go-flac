@@ -36,7 +36,12 @@ not a copy.
 
 ## SIMD
 
-- github.com/tphakala/simd: this project's own SIMD library. It is not a
-  dependency of the v0.1.0 pure-Go release; SIMD acceleration is planned for the
-  v0.2.0 track, where it will be consumed as a normal Go module dependency behind
-  a pure-Go fallback.
+- github.com/tphakala/simd (MIT): this project's own SIMD library, consumed as a
+  normal Go module dependency. The encoder's Rice partition cost search
+  (i32.RiceSums), fixed-predictor residuals (i32.Diff1-4), and quantized-LPC
+  residual cost evaluation (i32.LPCResidualEncode) dispatch to its AVX2 (amd64) /
+  NEON (arm64) kernels at runtime, with a pure-Go fallback on other CPUs and short
+  inputs. Every kernel is bit-identical to the scalar path, so the encoded stream
+  is byte-for-byte the same with or without SIMD; the rice/lpc parity tests assert
+  this on both the SIMD and pure-Go paths. Its only transitive dependency is
+  golang.org/x/sys (CPU feature detection).
