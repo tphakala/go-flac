@@ -206,8 +206,18 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 		maxOrder := min(4, len(shifted)-1)
 		res := ws.ensureCostRes(len(shifted)) // reused across orders
 		for o := 0; o <= maxOrder; o++ {
-			r := res[:len(shifted)-o]
-			lpc.ComputeFixedResiduals(r, shifted, o)
+			// FixedResidualsDiff writes [warmup | residual] into res, so the residual
+			// slice is res[o:]. Order 0's residual is the samples themselves, so pass
+			// shifted directly (CostResidual only reads it) and skip the differencing.
+			// res[o:] holds the same values ComputeFixedResiduals(res[:len-o], ...)
+			// produced, so the chosen order and its cost are byte-identical.
+			var r []int32
+			if o == 0 {
+				r = shifted
+			} else {
+				lpc.FixedResidualsDiff(res, shifted, o)
+				r = res[o:len(shifted)]
+			}
 			b := rice.CostResidual(r, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
 			if b < bestBits {
 				bestBits, bestOrder = b, o
@@ -216,9 +226,18 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 		return bestOrder, bestBits
 	}
 	order = lpc.BestFixedOrder(shifted, 4)
-	res := ws.ensureCostRes(len(shifted) - order)
-	lpc.ComputeFixedResiduals(res, shifted, order)
-	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
+	// Same [warmup | residual] handling as the exhaustive branch: residuals are
+	// res[order:], order 0's residual is shifted itself. Cost-only; the winner's
+	// residuals are recomputed by the scalar path in planSubframe.
+	res := ws.ensureCostRes(len(shifted))
+	var r []int32
+	if order == 0 {
+		r = shifted
+	} else {
+		lpc.FixedResidualsDiff(res, shifted, order)
+		r = res[order:len(shifted)]
+	}
+	return order, rice.CostResidual(r, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
 }
 
 // chooseLPCPlan runs LPC analysis on the wasted-bits-shifted samples and, if
@@ -232,9 +251,14 @@ func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []f
 	if !aok {
 		return 0, qc, 0, 0, false
 	}
-	res := ws.ensureCostRes(len(shifted) - o)
-	lpc.ComputeLPCResiduals(res, shifted, qc[:o], sh, o)
-	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
+	// LPCResidualsEncode writes [warmup | residual] into res, so the residual slice
+	// is res[o:]; it is bit-identical to ComputeLPCResiduals, so the priced cost
+	// (and thus the order chosen) is unchanged. The winner's residuals are
+	// recomputed by the scalar path in planSubframe, which stays the round-trip
+	// correctness anchor.
+	res := ws.ensureCostRes(len(shifted))
+	lpc.LPCResidualsEncode(res, shifted, qc[:o], sh)
+	return o, qc, sh, rice.CostResidual(res[o:len(shifted)], len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
 
 // wastedBits64 returns the number of low-order zero bits common to every sample.

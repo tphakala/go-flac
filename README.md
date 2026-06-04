@@ -4,10 +4,13 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/go-flac.svg)](https://pkg.go.dev/github.com/tphakala/go-flac)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Native, pure-Go FLAC encoder and decoder. No CGO, no external binaries, zero
-runtime dependencies, with a simple high-level PCM streaming API. SIMD
-acceleration (via [github.com/tphakala/simd](https://github.com/tphakala/simd)
-behind a pure-Go fallback) is planned for the v0.2.0 track; v0.1.0 is pure-Go.
+Native Go FLAC encoder and decoder. No CGO and no external binaries, with a
+simple high-level PCM streaming API. The encoder hot paths are SIMD-accelerated
+(via [github.com/tphakala/simd](https://github.com/tphakala/simd)) with a pure-Go
+fallback, so the library still builds and runs on every Go target; the SIMD
+kernels are bit-identical to the scalar path, so encoded output is byte-for-byte
+the same with or without SIMD. The only runtime module dependency is
+golang.org/x/sys (CPU feature detection).
 
 ## Install
 
@@ -62,9 +65,14 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
 - M6 completeness and v0.1.0: public-API and godoc review, provenance and license
   audit, and the full pre-release validation gate. This is the first tagged
   release: a feature-complete, pure-Go codec. (done)
-- v0.2.0 (next): SIMD integration. Wire the github.com/tphakala/simd integer and
-  float primitives behind runtime dispatch with pure-Go fallbacks, gated on a
-  measured end-to-end speedup.
+- v0.2.0 (next): SIMD integration. The encoder's Rice partition cost search
+  (i32.RiceSums), fixed-predictor residuals and order selection (i32.Diff1-4), and
+  quantized-LPC residual cost evaluation (i32.LPCResidualEncode) dispatch to
+  github.com/tphakala/simd's AVX2/NEON kernels at runtime, with a pure-Go fallback.
+  Every kernel is bit-identical to the scalar path (parity tests assert this on
+  both the SIMD and pure-Go paths), so output stays byte-identical. Level-5 16-bit
+  stereo encode throughput improves roughly 2.7x (about 15.2 ms/op to 5.5 ms/op on
+  the reference benchmark). (done)
 
 `SeekToSample` is sample-accurate and requires an io.Seeker; it returns
 `ErrSeekUnsupported` when the source is not seekable and `ErrInvalidSeek` on a
