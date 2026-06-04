@@ -90,7 +90,17 @@ func planSubframe(ws *Workspace, idx int, s []int32, bps int, p Params, window [
 	if wasted > 0 {
 		hdrBits += wasted // unary (wasted-1 zeros + 1)
 	}
-	shifted := shiftRight(s, wasted)
+	// Wasted-bits shift into a workspace buffer (no allocation); when wasted == 0
+	// the shift is a no-op so the input is used directly. Mirrors planSubframe64.
+	var shifted []int32
+	if wasted == 0 {
+		shifted = s
+	} else {
+		shifted = ws.ensureShifted32(len(s))
+		for i, v := range s {
+			shifted[i] = v >> uint(wasted)
+		}
+	}
 
 	fOrder, fResBits := chooseFixedOrder(ws, shifted, p)
 	fixedBits := hdrBits + fOrder*eff + fResBits
@@ -439,17 +449,4 @@ func allEqual(s []int32) bool {
 		}
 	}
 	return true
-}
-
-// shiftRight returns a new slice with every element of s shifted right by
-// wasted bits. Returns s directly when wasted is zero.
-func shiftRight(s []int32, wasted int) []int32 {
-	if wasted == 0 {
-		return s
-	}
-	out := make([]int32, len(s))
-	for i, v := range s {
-		out[i] = v >> uint(wasted)
-	}
-	return out
 }

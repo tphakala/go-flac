@@ -105,14 +105,6 @@ func autocorrelate(x []float64, maxLag int) []float64 {
 	return autoc
 }
 
-// levinson runs the Levinson-Durbin recursion on the autocorrelation (which
-// must have length >= maxOrder+1) and returns, for each order o in 1..maxOrder,
-// the o predictor coefficients in lpcByOrder[o] and the prediction error in
-// errByOrder[o] (errByOrder[0] = autoc[0]). The stored coefficients are sign-
-// adjusted so that pred = sum_j lpcByOrder[o][j] * x[n-1-j] matches the decoder.
-// maxComputed is the highest order actually produced; it is < maxOrder if the
-// recursion hit a non-positive error and stopped early. lpcByOrder[o] is nil
-// for orders beyond maxComputed.
 // levinsonInto runs the Levinson-Durbin recursion writing into caller-owned
 // buffers: errByOrder receives the per-order prediction errors, lpcWork[:maxOrder]
 // is the working coefficient array (entries are written before read, exactly as in
@@ -159,6 +151,15 @@ func levinsonInto(lpcFlat, errByOrder, lpcWork, autoc []float64, maxOrder, strid
 	return maxOrder
 }
 
+// levinson runs the Levinson-Durbin recursion on the autocorrelation (which must
+// have length >= maxOrder+1) and returns, for each order o in 1..maxOrder, the o
+// predictor coefficients in lpcByOrder[o] and the prediction error in errByOrder[o]
+// (errByOrder[0] = autoc[0]). The stored coefficients are sign-adjusted so that
+// pred = sum_j lpcByOrder[o][j] * x[n-1-j] matches the decoder. maxComputed is the
+// highest order actually produced; it is < maxOrder if the recursion hit a
+// non-positive error and stopped early. lpcByOrder[o] is nil for orders beyond
+// maxComputed. It allocates; the encoder hot path uses levinsonInto with the
+// workspace scratch instead.
 func levinson(autoc []float64, maxOrder int) (lpcByOrder [][]float64, errByOrder []float64, maxComputed int) {
 	flat := make([]float64, (maxOrder+1)*maxOrder)
 	errByOrder = make([]float64, maxOrder+1)
@@ -171,12 +172,6 @@ func levinson(autoc []float64, maxOrder int) (lpcByOrder [][]float64, errByOrder
 	return lpcByOrder, errByOrder, maxComputed
 }
 
-// quantizeCoefficients converts float predictor coefficients to int32 with a
-// non-negative shift at the given precision (in bits), using error-feedback
-// rounding. The shift is chosen so the largest-magnitude coefficient fills the
-// precision range, then clamped to [0, maxQLPShift]; coefficients are clamped
-// to [-2^(precision-1), 2^(precision-1)-1]. Returns ok=false when the
-// coefficients carry no usable predictor (all zero, NaN, or Inf).
 // quantizeCoefficientsInto performs the same quantization as quantizeCoefficients
 // but writes the int32 coefficients into qOut[:len(lpc)] (which must have
 // cap >= len(lpc)) and returns qn = len(lpc) on success. The cmax/Frexp/shift
@@ -236,6 +231,13 @@ func quantizeCoefficientsInto(qOut []int32, lpc []float64, precision int) (qn, s
 	return len(lpc), shift, true
 }
 
+// quantizeCoefficients converts float predictor coefficients to int32 with a
+// non-negative shift at the given precision (in bits), using error-feedback
+// rounding. The shift is chosen so the largest-magnitude coefficient fills the
+// precision range, then clamped to [0, maxQLPShift]; coefficients are clamped to
+// [-2^(precision-1), 2^(precision-1)-1]. Returns ok=false when the coefficients
+// carry no usable predictor (all zero, NaN, or Inf). It allocates; the encoder hot
+// path uses quantizeCoefficientsInto with a caller-owned buffer instead.
 func quantizeCoefficients(lpc []float64, precision int) (qcoeff []int32, shift int, ok bool) {
 	q := make([]int32, len(lpc))
 	qn, sh, ok := quantizeCoefficientsInto(q, lpc, precision)
