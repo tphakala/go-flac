@@ -131,16 +131,18 @@ func planSubframe(ws *Workspace, idx int, s []int32, bps int, p Params, window [
 		c := &ws.cand[idx]
 		res := c.ensureRes(len(s) - best.order)
 		lpc.ComputeFixedResiduals(res, shifted, best.order)
-		_, plans, paramBits, _ := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
+		_, plans, paramBits, total := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
+		best.bits = hdrBits + best.order*eff + total
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes(len(s) - best.order)
 		lpc.ComputeLPCResiduals(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
-		_, plans, paramBits, _ := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
+		_, plans, paramBits, total := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
+		best.bits = hdrBits + best.order*eff + 4 + 5 + best.order*p.LPCPrecision + total
 	}
 	return best
 }
