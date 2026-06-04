@@ -59,13 +59,16 @@ type Workspace struct {
 	// on demand (mirroring the cap checks in the other ensure* accessors).
 	lpcCap int
 	// costRes is the shared transient residual buffer for the cost-evaluation
-	// passes in chooseFixedOrder/chooseLPCPlan. It holds only throwaway residuals
-	// used to price a candidate; the winner's residuals are recomputed into the
-	// per-candidate carry buffer afterward, so reusing one buffer here is safe.
+	// passes in chooseFixedOrder/chooseLPCPlan. For a fixed winner the residual is
+	// recomputed into the per-candidate carry buffer; for an LPC winner the residual
+	// chooseLPCPlan left here is COPIED into the carry buffer (not re-run through the
+	// FIR), so this buffer must stay intact between chooseLPCPlan returning and the
+	// carry copy in planSubframe. Both consumers finish within one planSubframe call
+	// before the next candidate reuses it, so sharing one buffer here is safe.
 	costRes []int32
 	// costRes64 is the int64 analogue of costRes for the wide (25-32 bps) path.
-	// Used by chooseFixedOrder64 and chooseLPCPlan64 for transient cost-eval
-	// residuals; distinct from cand[idx].res64 which carries the winner.
+	// Used by chooseFixedOrder64 and chooseLPCPlan64 for cost-eval residuals; the LPC
+	// winner's residual is copied from here into cand[idx].res64 rather than recomputed.
 	costRes64 []int64
 	// shifted32 and shifted64 are the wasted-bits-shifted sample buffers (int32 and
 	// wide int64). Filled once per planSubframe/planSubframe64 call (when wasted > 0)

@@ -34,9 +34,11 @@ func TestChecksumHelpers(t *testing.T) {
 	}
 }
 
-func TestChecksum16SliceBy8MatchesScalar(t *testing.T) {
+func TestChecksum16SliceBy16MatchesScalar(t *testing.T) {
 	r := rand.New(rand.NewSource(1))
-	for _, n := range []int{0, 1, 7, 8, 9, 15, 16, 31, 64, 255, 4097} {
+	// Lengths straddle the 16-byte slice-by-16 stride and its byte tail: multiples
+	// of 16, one over, one under, plus large buffers with odd tails.
+	for _, n := range []int{0, 1, 7, 8, 9, 15, 16, 17, 23, 31, 32, 33, 47, 48, 64, 255, 4096, 4097, 4111} {
 		buf := make([]byte, n)
 		for i := range buf {
 			buf[i] = byte(r.Intn(256))
