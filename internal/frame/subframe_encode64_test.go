@@ -73,11 +73,11 @@ func TestWriteSubframe64RoundTrip(t *testing.T) {
 		p := paramsLevel(t, 8)
 		win := apodizationWindow(p, len(s))
 		var ws Workspace
-		plan := planSubframe64(&ws, s, bps, p, win)
+		plan := planSubframe64(&ws, 0, s, bps, p, win)
 
 		bw := bitio.NewWriter()
 		bw.Reset()
-		writeSubframe64(bw, &ws, s, bps, plan, p)
+		writeSubframe64(bw, &ws, s, bps, &plan, p)
 		bw.AlignByte()
 
 		br := bitio.NewReader(bytesReaderFrame(bw.Bytes()))

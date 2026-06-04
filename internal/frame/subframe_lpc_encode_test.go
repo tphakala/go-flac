@@ -35,7 +35,7 @@ func TestPlanSubframeSelectsLPC(t *testing.T) {
 	window := lpc.TukeyWindow(len(s), 0.5)
 
 	var ws Workspace
-	plan := planSubframe(&ws, s, 16, p, window)
+	plan := planSubframe(&ws, 0, s, 16, p, window)
 	if plan.kind != 3 {
 		t.Fatalf("plan.kind = %d, want 3 (LPC) for a strongly correlated signal", plan.kind)
 	}
@@ -54,7 +54,7 @@ func TestPlanSubframeNoLPCWhenDisabled(t *testing.T) {
 	s := arSignal16(4096)
 	p := Params{MaxPartitionOrder: 3} // MaxLPCOrder 0 -> fixed only
 	var ws Workspace
-	plan := planSubframe(&ws, s, 16, p, nil)
+	plan := planSubframe(&ws, 0, s, 16, p, nil)
 	if plan.kind == 3 {
 		t.Fatal("plan.kind = 3 (LPC) but MaxLPCOrder is 0")
 	}
@@ -67,13 +67,13 @@ func TestWriteLPCRoundTrips(t *testing.T) {
 	window := lpc.TukeyWindow(len(s), 0.5)
 
 	var ws Workspace
-	plan := planSubframe(&ws, s, bps, p, window)
+	plan := planSubframe(&ws, 0, s, bps, p, window)
 	if plan.kind != 3 {
 		t.Fatalf("precondition: expected LPC plan, got kind %d", plan.kind)
 	}
 
 	bw := bitio.NewWriter()
-	writeSubframe(bw, &ws, s, bps, plan, p)
+	writeSubframe(bw, &ws, s, bps, &plan, p)
 	bw.AlignByte()
 	data := bw.Bytes()
 

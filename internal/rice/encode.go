@@ -24,8 +24,11 @@ func zigzag64(r int64) uint64 {
 	return uint64((r << 1) ^ (r >> 63))
 }
 
-// partPlan is the chosen coding for one partition.
-type partPlan struct {
+// PartPlan is the chosen coding for one partition. The fields stay unexported:
+// the frame package holds []PartPlan opaquely (carrying a planned subframe's
+// chosen partition coding from the planner to the writer) and passes it back to
+// WritePlanned without reading the fields.
+type PartPlan struct {
 	escape  bool
 	param   int // Rice parameter k (when !escape)
 	rawBits int // raw sample width (when escape)
@@ -38,8 +41,8 @@ type partPlan struct {
 type Scratch struct {
 	sums  []uint64   // finest-order [partitions*ncols] flattened
 	maxU  []uint64   // finest-order per-partition max zigzag
-	cur   []partPlan // working per-order plan buffer
-	plans []partPlan // chosen (best) partition plan, returned aliased
+	cur   []PartPlan // working per-order plan buffer
+	plans []PartPlan // chosen (best) partition plan, returned aliased
 }
 
 func (s *Scratch) ensure(parts, ncols int) {
@@ -52,11 +55,11 @@ func (s *Scratch) ensure(parts, ncols int) {
 	}
 	s.maxU = s.maxU[:parts]
 	if cap(s.cur) < parts {
-		s.cur = make([]partPlan, parts)
+		s.cur = make([]PartPlan, parts)
 	}
 	s.cur = s.cur[:parts]
 	if cap(s.plans) < parts {
-		s.plans = make([]partPlan, parts)
+		s.plans = make([]PartPlan, parts)
 	}
 }
 
@@ -82,7 +85,7 @@ func feasiblePmax(blockSize, predOrder, maxPartOrder int) int {
 }
 
 // planPartition picks the cheapest coding for the zigzag values in zz.
-func planPartition(zz []uint64) partPlan {
+func planPartition(zz []uint64) PartPlan {
 	k, riceBitCount := bestParam(zz)
 
 	// Escape alternative: store each residual raw at the max needed width. The width
@@ -98,11 +101,11 @@ func planPartition(zz []uint64) partPlan {
 	if raw := bits.Len64(maxU); raw <= maxRawBits {
 		escBits := 5 + raw*len(zz)
 		if int64(escBits) < riceBitCount {
-			return partPlan{escape: true, rawBits: raw, payload: escBits}
+			return PartPlan{escape: true, rawBits: raw, payload: escBits}
 		}
 	}
 	// Safe narrowing: riceBitCount <= ~131k for any real partition, inside int.
-	return partPlan{param: k, payload: int(riceBitCount)}
+	return PartPlan{param: k, payload: int(riceBitCount)}
 }
 
 // bestParam returns the Rice parameter k minimizing payload bits for zz, and that
@@ -162,23 +165,31 @@ func riceBits(zz []uint64, k int) int64 {
 
 // EncodeResidual writes the partitioned Rice residual for res (the blockSize-
 // predOrder residuals that follow the warmup samples) and returns the number of
-// bits written (excluding any byte-alignment padding). The caller supplies sc;
-// the chosen plan aliases sc.plans, so no other rice call may run between the
-// PlanResidualInt32 below and the write loop.
+// bits written (excluding any byte-alignment padding). It plans the partition
+// then emits it via WritePlanned. The caller supplies sc; the chosen plan aliases
+// sc.plans, so no other rice call may run between the PlanResidualInt32 below and
+// the write loop.
 func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
-	po, plans, paramBits, _ := PlanResidualInt32(res, blockSize, predOrder, maxPartOrder, sc)
+	_, plans, paramBits, _ := PlanResidualInt32(res, blockSize, predOrder, maxPartOrder, sc)
+	return WritePlanned(bw, res, predOrder, blockSize, plans, paramBits)
+}
 
+// WritePlanned emits the partitioned-Rice body for res using a precomputed plan
+// (from PlanResidualInt32), computing zigzag(res[i]) on the fly. It writes the
+// 2-bit method, the 4-bit partition order, the per-partition parameter/escape
+// fields, and the residual payloads, returning the bits written. It performs no
+// search; the partition order is recovered from len(plans).
+func WritePlanned(bw *bitio.Writer, res []int32, predOrder, blockSize int, plans []PartPlan, paramBits int) int {
 	method := method4bit
 	escapeCode := uint64(escape4)
 	if paramBits == 5 {
 		method = method5bit
 		escapeCode = uint64(escape5)
 	}
-
-	written := 2 + 4 // method (2 bits) + partition order (4 bits)
+	po := bits.Len(uint(len(plans))) - 1 // partitions = 1<<po
+	written := 2 + 4
 	bw.WriteBits(uint64(method), 2)
 	bw.WriteBits(uint64(po), 4)
-
 	partitions := 1 << po
 	partLen := blockSize / partitions
 	idx := 0
@@ -187,9 +198,6 @@ func EncodeResidual(bw *bitio.Writer, res []int32, blockSize, predOrder, maxPart
 		if p == 0 {
 			n -= predOrder
 			if n < 0 {
-				// PlanResidualInt32 never selects an order where the first partition is
-				// shorter than predOrder; this guards a future predictor (LPC) whose
-				// order could exceed a tiny partition length.
 				n = 0
 			}
 		}
@@ -223,22 +231,28 @@ func CostResidual(res []int32, blockSize, predOrder, maxPartOrder int, sc *Scrat
 }
 
 // EncodeResidual64 is the int64-residual analogue of EncodeResidual, for wide
-// (25-32 bps) subframes. The chosen plan aliases sc.plans, so no other rice call
-// may run between the PlanResidualInt64 below and the write loop.
+// (25-32 bps) subframes. It plans the partition then emits it via WritePlanned64.
+// The chosen plan aliases sc.plans, so no other rice call may run between the
+// PlanResidualInt64 below and the write loop.
 func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) int {
-	po, plans, paramBits, _ := PlanResidualInt64(res, blockSize, predOrder, maxPartOrder, sc)
+	_, plans, paramBits, _ := PlanResidualInt64(res, blockSize, predOrder, maxPartOrder, sc)
+	return WritePlanned64(bw, res, predOrder, blockSize, plans, paramBits)
+}
 
+// WritePlanned64 is the int64-residual analogue of WritePlanned, for wide
+// (25-32 bps) subframes. It computes zigzag64(res[i]) on the fly and performs no
+// search; the partition order is recovered from len(plans).
+func WritePlanned64(bw *bitio.Writer, res []int64, predOrder, blockSize int, plans []PartPlan, paramBits int) int {
 	method := method4bit
 	escapeCode := uint64(escape4)
 	if paramBits == 5 {
 		method = method5bit
 		escapeCode = uint64(escape5)
 	}
-
-	written := 2 + 4 // method (2 bits) + partition order (4 bits)
+	po := bits.Len(uint(len(plans))) - 1 // partitions = 1<<po
+	written := 2 + 4
 	bw.WriteBits(uint64(method), 2)
 	bw.WriteBits(uint64(po), 4)
-
 	partitions := 1 << po
 	partLen := blockSize / partitions
 	idx := 0
@@ -247,9 +261,6 @@ func EncodeResidual64(bw *bitio.Writer, res []int64, blockSize, predOrder, maxPa
 		if p == 0 {
 			n -= predOrder
 			if n < 0 {
-				// PlanResidualInt64 never selects an order where the first partition is
-				// shorter than predOrder; this guards a future predictor (LPC) whose
-				// order could exceed a tiny partition length.
 				n = 0
 			}
 		}
@@ -291,7 +302,7 @@ func CostResidual64(res []int64, blockSize, predOrder, maxPartOrder int, sc *Scr
 // byte-identical golden test guards against any drift.
 //
 //nolint:dupl // intentional: typed parallel of PlanResidualInt64
-func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []partPlan, paramBits, totalBits int) {
+func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []PartPlan, paramBits, totalBits int) {
 	pmax := feasiblePmax(blockSize, predOrder, maxPartOrder)
 	// Guard: po==0 itself must be feasible; otherwise fall back like the reference.
 	if blockSize-predOrder < 0 || blockSize == 0 {
@@ -329,7 +340,7 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 // PlanResidualInt64 is the wide-path analogue of PlanResidualInt32 (zigzag64).
 //
 //nolint:dupl // intentional: typed parallel of PlanResidualInt32
-func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []partPlan, paramBits, totalBits int) {
+func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *Scratch) (bestPO int, plans []PartPlan, paramBits, totalBits int) {
 	pmax := feasiblePmax(blockSize, predOrder, maxPartOrder)
 	if blockSize-predOrder < 0 || blockSize == 0 {
 		zz := make([]uint64, len(res))
@@ -366,7 +377,7 @@ func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *
 // merging upward between orders, and copies the winning order's plans into
 // sc.plans via a separate working buffer (sc.cur) so a later, smaller order
 // cannot overwrite the chosen plans before they are returned.
-func planFromTables(sc *Scratch, blockSize, predOrder, pmax, kHi, ncols int) (bestPO int, plans []partPlan, paramBits, totalBits int) {
+func planFromTables(sc *Scratch, blockSize, predOrder, pmax, kHi, ncols int) (bestPO int, plans []PartPlan, paramBits, totalBits int) {
 	totalBits = int(^uint(0) >> 1)
 	for po := pmax; po >= 0; po-- {
 		parts := 1 << po
@@ -403,8 +414,8 @@ func planFromTables(sc *Scratch, blockSize, predOrder, pmax, kHi, ncols int) (be
 
 // riceFallbackPlan reproduces planResidualReference's order-0 single-partition
 // fallback for blocks where no partition order (not even order 0) is feasible.
-func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []partPlan, paramBits, totalBits int) {
-	var pl partPlan
+func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []PartPlan, paramBits, totalBits int) {
+	var pl PartPlan
 	if len(zz) > 0 {
 		pl = planPartition(zz)
 	}
@@ -412,7 +423,7 @@ func riceFallbackPlan(zz []uint64) (bestPO int, bestPlans []partPlan, paramBits,
 	if !pl.escape && pl.param > maxParam4 {
 		paramBits = 5
 	}
-	return 0, []partPlan{pl}, paramBits, 2 + 4 + paramBits + pl.payload
+	return 0, []PartPlan{pl}, paramBits, 2 + 4 + paramBits + pl.payload
 }
 
 // buildFinestTablesInt32 computes, for the finest feasible partition order pmax,
@@ -497,7 +508,7 @@ func mergeUpward(sums, maxU []uint64, parts, ncols int) {
 
 // choosePartition reproduces planPartition+bestParam for one partition given its
 // precomputed sums[k] table (k in 0..kHi), its maxU, and its residual count n.
-func choosePartition(sums []uint64, maxU uint64, n, kHi int) partPlan {
+func choosePartition(sums []uint64, maxU uint64, n, kHi int) PartPlan {
 	// bestParam windowed search, byte-identical to bestParam(zz).
 	est := 0
 	if n > 0 {
@@ -528,8 +539,8 @@ func choosePartition(sums []uint64, maxU uint64, n, kHi int) partPlan {
 	if raw := bits.Len64(maxU); raw <= maxRawBits {
 		escBits := 5 + raw*n
 		if int64(escBits) < bestBits {
-			return partPlan{escape: true, rawBits: raw, payload: escBits}
+			return PartPlan{escape: true, rawBits: raw, payload: escBits}
 		}
 	}
-	return partPlan{param: best, payload: int(bestBits)}
+	return PartPlan{param: best, payload: int(bestBits)}
 }

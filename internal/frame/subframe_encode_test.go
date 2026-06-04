@@ -62,8 +62,8 @@ func roundTripSubframe(t *testing.T, s []int32, bps int, p Params) {
 	t.Helper()
 	bw := bitio.NewWriter()
 	var ws Workspace
-	plan := planSubframe(&ws, s, bps, p, nil)
-	writeSubframe(bw, &ws, s, bps, plan, p)
+	plan := planSubframe(&ws, 0, s, bps, p, nil)
+	writeSubframe(bw, &ws, s, bps, &plan, p)
 	bw.AlignByte()
 	got := decodeOneSubframe(t, bw.Bytes(), len(s), bps)
 	for i := range s {
