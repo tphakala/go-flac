@@ -124,8 +124,8 @@ func planSubframe(ws *Workspace, idx int, s []int32, bps int, p Params, window [
 
 	// Carry the winner's residuals and chosen Rice plan into slot idx so the writer
 	// emits them without recomputing. Constant/verbatim subframes carry no residual.
-	// This recomputes exactly what the writer used to compute (same shifted, order,
-	// predictor), so the emitted bits are byte-identical.
+	// The carried residuals match exactly what the cost pass computed (same shifted,
+	// order, predictor), so the emitted bits are byte-identical.
 	switch best.kind {
 	case 2: // fixed
 		c := &ws.cand[idx]
@@ -138,7 +138,13 @@ func planSubframe(ws *Workspace, idx int, s []int32, bps int, p Params, window [
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes(len(s) - best.order)
-		lpc.ComputeLPCResiduals(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
+		// chooseLPCPlan already ran this subframe's residual through the SIMD LPC FIR
+		// and left [warmup|residual] in ws.costRes; copy the residual (costRes[order:])
+		// instead of re-running ComputeLPCResiduals, which was the single largest
+		// scalar cost in the encoder. costRes is intact here: chooseLPCPlan is the last
+		// pass to write it before this copy, and nothing in between touches it.
+		// Byte-identical: the SIMD FIR matches ComputeLPCResiduals.
+		copy(res, ws.costRes[best.order:len(s)])
 		_, plans, paramBits, total := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
@@ -250,11 +256,11 @@ func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []f
 	if !aok {
 		return 0, qc, 0, 0, false
 	}
-	// LPCResidualsEncode writes [warmup | residual] into res, so the residual slice
-	// is res[o:]; it is bit-identical to ComputeLPCResiduals, so the priced cost
-	// (and thus the order chosen) is unchanged. The winner's residuals are
-	// recomputed by the scalar path in planSubframe, which stays the round-trip
-	// correctness anchor.
+	// LPCResidualsEncode writes [warmup | residual] into ws.costRes via the SIMD LPC
+	// FIR, so the residual is costRes[o:]. planSubframe carries that exact slice into
+	// the candidate slot when LPC wins (see the case-3 copy), so the winning subframe
+	// is never run through the FIR a second time. This is the last cost-eval pass to
+	// touch costRes before the carry, so it must stay intact until then.
 	res := ws.ensureCostRes(len(shifted))
 	lpc.LPCResidualsEncode(res, shifted, qc[:o], sh)
 	r := res[o:len(shifted)] // LPCResidualsEncode writes [warmup|residual]; residual is res[o:]
@@ -356,10 +362,15 @@ func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window [
 	if !aok {
 		return 0, qc, 0, 0, false
 	}
+	// The wide path has no SIMD i64 LPC kernel, so this uses scalar ComputeLPCResiduals64,
+	// which writes the residual with NO warmup prefix (length len-o) into ws.costRes64
+	// (unlike the int32 path, whose SIMD kernel writes [warmup|residual]). planSubframe64
+	// carries that exact slice (costRes64[:len-o]) into the candidate slot when LPC wins,
+	// so the winning subframe is not run through the FIR twice. It is the last cost-eval
+	// pass to touch costRes64 before the carry.
 	res := ws.ensureCostRes64(len(shifted) - o)
 	lpc.ComputeLPCResiduals64(res, shifted, qc[:o], sh, o)
-	// res holds the residual with NO warmup prefix (length len-o), so estimate over
-	// ALL of res (do not slice res[o:]). Price on the same basis as
+	// Estimate over ALL of res (no warmup prefix to skip). Price on the same basis as
 	// chooseFixedOrder64: exact under ExhaustiveFixed, estimate otherwise.
 	if p.ExhaustiveFixed {
 		resBits = rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice)
@@ -475,7 +486,10 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes64(len(s) - best.order)
-		lpc.ComputeLPCResiduals64(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
+		// chooseLPCPlan64 already computed this residual into ws.costRes64 (no warmup
+		// prefix); copy it instead of re-running ComputeLPCResiduals64. costRes64 is
+		// intact here (chooseLPCPlan64 is the last pass to touch it). Byte-identical.
+		copy(res, ws.costRes64[:len(s)-best.order])
 		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
