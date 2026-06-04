@@ -56,3 +56,20 @@ func TestZigzagSum64MatchesScalar(t *testing.T) {
 		t.Fatalf("ZigzagSum64=%d want %d", got, want)
 	}
 }
+
+func TestEstimateRiceBitsEdgeCases(t *testing.T) {
+	// n <= 0 is degenerate (empty or over-long predictor order) and must return 0
+	// rather than divide by zero.
+	if got := EstimateRiceBits(1000, 0); got != 0 {
+		t.Fatalf("EstimateRiceBits(_, 0) = %d, want 0", got)
+	}
+	if got := EstimateRiceBits(1000, -1); got != 0 {
+		t.Fatalf("EstimateRiceBits(_, -1) = %d, want 0", got)
+	}
+	// All-zero residuals (zz == 0): mean is 0 so k == 0, and each sample costs only
+	// the single unary stop bit, so the estimate is exactly n.
+	const n = 64
+	if got := EstimateRiceBits(0, n); got != n {
+		t.Fatalf("EstimateRiceBits(0, %d) = %d, want %d", n, got, n)
+	}
+}

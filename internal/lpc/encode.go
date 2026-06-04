@@ -71,7 +71,11 @@ func ComputeLPCResiduals64(res, src []int64, qcoeff []int32, shift, order int) {
 // selection. The body is replaced by a SIMD kernel in a later task; this scalar
 // form is the reference. Allocation-free (writes through the caller's array).
 func FixedAbsSums(src []int32, sums *[5]uint64) {
-	*sums = [5]uint64{}
+	// Accumulate into a local array and store once at the end. Writing through
+	// *sums every iteration would force the accumulators to memory (the compiler
+	// cannot prove sums does not alias src), so locals keep them in registers
+	// across the hot loop.
+	var s [5]uint64
 	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
 	for i, v := range src {
 		e0 := int64(v)
@@ -79,21 +83,22 @@ func FixedAbsSums(src []int32, sums *[5]uint64) {
 		e2 := e1 - p2
 		e3 := e2 - p3
 		e4 := e3 - p4
-		sums[0] += absU64(e0)
+		s[0] += absU64(e0)
 		if i >= 1 {
-			sums[1] += absU64(e1)
+			s[1] += absU64(e1)
 		}
 		if i >= 2 {
-			sums[2] += absU64(e2)
+			s[2] += absU64(e2)
 		}
 		if i >= 3 {
-			sums[3] += absU64(e3)
+			s[3] += absU64(e3)
 		}
 		if i >= 4 {
-			sums[4] += absU64(e4)
+			s[4] += absU64(e4)
 		}
 		p1, p2, p3, p4 = e0, e1, e2, e3
 	}
+	*sums = s
 }
 
 // FixedAbsSums64 is the int64 analogue of FixedAbsSums: it fills sums[order] with
@@ -101,7 +106,9 @@ func FixedAbsSums(src []int32, sums *[5]uint64) {
 // pass, excluding the first `order` warmup samples. The body is replaced by a SIMD
 // kernel in a later task; this scalar form is the reference. Allocation-free.
 func FixedAbsSums64(src []int64, sums *[5]uint64) {
-	*sums = [5]uint64{}
+	// Accumulate into a local array and store once at the end (see FixedAbsSums
+	// for the register-residency rationale).
+	var s [5]uint64
 	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
 	for i, v := range src {
 		e0 := v
@@ -109,21 +116,22 @@ func FixedAbsSums64(src []int64, sums *[5]uint64) {
 		e2 := e1 - p2
 		e3 := e2 - p3
 		e4 := e3 - p4
-		sums[0] += absU64(e0)
+		s[0] += absU64(e0)
 		if i >= 1 {
-			sums[1] += absU64(e1)
+			s[1] += absU64(e1)
 		}
 		if i >= 2 {
-			sums[2] += absU64(e2)
+			s[2] += absU64(e2)
 		}
 		if i >= 3 {
-			sums[3] += absU64(e3)
+			s[3] += absU64(e3)
 		}
 		if i >= 4 {
-			sums[4] += absU64(e4)
+			s[4] += absU64(e4)
 		}
 		p1, p2, p3, p4 = e0, e1, e2, e3
 	}
+	*sums = s
 }
 
 // absU64 returns the magnitude of v as a uint64. It is correct for the entire
