@@ -32,7 +32,7 @@ panic-freedom.
 depths 4-32, constant/verbatim/fixed and LPC predictors, full four-way stereo
 decorrelation (independent, left-side, right-side, mid-side), and the 0-8
 compression-level API. Levels 0-2 use fixed predictors; levels 3-8 add quantized
-LPC with deeper residual-partition search and exhaustive fixed-order selection.
+LPC with deeper residual-partition search.
 Depths up to 24 bps run an int32 path; depths 25-32 bps run a dedicated int64
 path (encoder and decoder), and the int32 output for <= 24 bps is byte-identical
 to before the wide-depth work. The encoder is allocation-light: a per-encoder
