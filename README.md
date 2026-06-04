@@ -30,7 +30,8 @@ compression-level API. Levels 0-2 use fixed predictors; levels 3-8 add quantized
 LPC with deeper residual-partition search and exhaustive fixed-order selection.
 Depths up to 24 bps run an int32 path; depths 25-32 bps run a dedicated int64
 path (encoder and decoder), and the int32 output for <= 24 bps is byte-identical
-to before the wide-depth work.
+to before the wide-depth work. The encoder is allocation-light: a per-encoder
+reusable scratch buffer keeps steady-state per-block heap allocations near zero.
 
 - M1 Groundwork: skeleton, tooling, CI. (done)
 - M2 Decoder: bitstream, metadata, frame decode, Rice + predictor restore,
@@ -47,7 +48,16 @@ to before the wide-depth work.
   (ErrTruncatedStream), and opt-in SEEKTABLE emission (Config.SeekTableInterval,
   requires an io.WriteSeeker). A present SEEKTABLE accelerates seeks; binary search
   is the fallback.
-- M5 SIMD integration.
+- M5a Encoder performance: a per-encoder reusable scratch `Workspace` plus the
+  libFLAC merge-upward Rice partition search. The workspace removes the per-frame
+  and per-subframe heap allocations; the merge-upward search computes the
+  partition sums once at the finest order and merges upward instead of rescanning
+  the residuals per partition order. Output is byte-identical to before; steady-
+  state per-block allocations drop to about zero and level-5 16-bit stereo encode
+  throughput improves roughly 65% (about 25.5 ms/op to 15.3 ms/op on the
+  reference benchmark). (done)
+- M5b SIMD integration: wire the github.com/tphakala/simd integer and float
+  primitives behind runtime dispatch with pure-Go fallbacks.
 - M6 completeness and v0.1.0.
 
 `SeekToSample` is sample-accurate and requires an io.Seeker; it returns
