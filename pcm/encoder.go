@@ -194,12 +194,12 @@ func (e *Encoder) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// emitBlock feeds chunk (exactly n inter-channel samples) into MD5, deinterleaves
-// it, and writes one frame. When seek-table recording is active, a seek point is
-// appended for the first frame (frameOffset == 0) and for each frame whose first
-// sample meets or crosses the next boundary.
+// emitBlock deinterleaves chunk (exactly n inter-channel samples), writes one
+// frame, and only then, after the sink accepts the frame, feeds chunk into the
+// STREAMINFO MD5. When seek-table recording is active, a seek point is appended
+// for the first frame (frameOffset == 0) and for each frame whose first sample
+// meets or crosses the next boundary.
 func (e *Encoder) emitBlock(chunk []byte, n int) error {
-	e.md5.Write(chunk)
 	for c := range e.ch {
 		e.ch[c] = e.ch[c][:n]
 	}
@@ -212,6 +212,13 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	if _, err := e.w.Write(buf); err != nil {
 		return err
 	}
+	// Ingest the PCM into the STREAMINFO MD5 only after the sink accepted the
+	// frame, so a sink-write failure leaves the MD5 reflecting exactly the frames
+	// durably written and a caller that retries the same input cannot double-hash
+	// it. deinterleaveSamples and EncodeFrame read chunk but never modify it, so
+	// deferring the hash is byte-identical to the previous order on the success
+	// path (verified by the byte-identical golden test).
+	e.md5.Write(chunk)
 	if e.seekInterval > 0 && len(e.points) < e.seekMaxPoints {
 		if frameOffset == 0 || int64(firstSample) >= e.nextBoundary {
 			e.points = append(e.points, meta.SeekPoint{
