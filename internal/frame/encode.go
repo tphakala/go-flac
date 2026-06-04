@@ -21,7 +21,7 @@ func apodizationWindow(p Params, n int) []float64 {
 // EncodeFrame encodes one frame (one block per channel) into bw and returns the
 // assembled frame bytes. bw is Reset at entry; the returned slice aliases bw's
 // buffer and is valid until the next use of bw.
-func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, frameNum uint64) []byte {
+func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, ch [][]int32, frameNum uint64) []byte {
 	bw.Reset()
 	bs := len(ch[0])
 	bps := si.BitDepth
@@ -29,9 +29,9 @@ func EncodeFrame(bw *bitio.Writer, p Params, si flac.StreamInfo, ch [][]int32, f
 
 	switch {
 	case nch == 2 && p.Stereo != StereoIndependent && bps <= 24:
-		encodeStereo(bw, p, bps, bs, ch[0], ch[1], frameNum)
+		encodeStereo(bw, ws, p, bps, bs, ch[0], ch[1], frameNum)
 	case nch == 2 && p.Stereo != StereoIndependent && bps >= 25:
-		encodeStereo64(bw, p, bps, bs, ch[0], ch[1], frameNum)
+		encodeStereo64(bw, ws, p, bps, bs, ch[0], ch[1], frameNum)
 	case bps >= 25:
 		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
 		// so upcast each channel to int64 before planning and writing.
@@ -71,9 +71,9 @@ const (
 // encodeStereo selects a channel assignment by estimated bits and writes it.
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo64
-func encodeStereo(bw *bitio.Writer, p Params, bps, bs int, l, r []int32, frameNum uint64) {
-	side := make([]int32, bs)
-	mid := make([]int32, bs)
+func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r []int32, frameNum uint64) {
+	side := ws.side[:bs]
+	mid := ws.mid[:bs]
 	for i := range l {
 		side[i] = l[i] - r[i]
 		mid[i] = (l[i] + r[i]) >> 1
@@ -139,11 +139,11 @@ func finishFrame(bw *bitio.Writer) {
 // arrive as int32 and are upcast to int64 before wide-domain decorrelation.
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo
-func encodeStereo64(bw *bitio.Writer, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
+func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
 	l := make([]int64, bs)
 	r := make([]int64, bs)
-	side := make([]int64, bs)
-	mid := make([]int64, bs)
+	side := ws.side64[:bs]
+	mid := ws.mid64[:bs]
 	// Upcast and decorrelate in a single pass over the block.
 	for i := range bs {
 		li, ri := int64(l32[i]), int64(r32[i])

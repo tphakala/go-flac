@@ -32,9 +32,10 @@ type Encoder struct {
 	bytesPS  int
 	frameLen int // bytesPS * channels (bytes per inter-channel sample)
 
-	bw  *bitio.Writer
-	ch  [][]int32 // per-channel block buffers (len encoderBlockSize)
-	md5 hash.Hash
+	bw   *bitio.Writer
+	ch   [][]int32 // per-channel block buffers (len encoderBlockSize)
+	work *frame.Workspace
+	md5  hash.Hash
 
 	carry    []byte // reusable join buffer for leftover + new input
 	leftover []byte // < one full block of trailing bytes between Writes
@@ -87,6 +88,7 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 	for c := range e.ch {
 		e.ch[c] = make([]int32, encoderBlockSize)
 	}
+	e.work = frame.NewWorkspace(encoderBlockSize, cfg.Channels, e.params.MaxLPCOrder)
 	if ws, ok := w.(io.WriteSeeker); ok {
 		e.ws = ws
 	}
@@ -198,7 +200,7 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	frameOffset := e.audioBytes // byte offset of this frame from the first frame
 	firstSample := e.total      // first inter-channel sample of this block
 
-	buf := frame.EncodeFrame(e.bw, e.params, e.si, e.ch, e.frameNum)
+	buf := frame.EncodeFrame(e.bw, e.work, e.params, e.si, e.ch, e.frameNum)
 	if _, err := e.w.Write(buf); err != nil {
 		return err
 	}

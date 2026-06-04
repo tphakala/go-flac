@@ -12,7 +12,7 @@ import (
 func roundTripFrame(t *testing.T, si flac.StreamInfo, p Params, ch [][]int32, num uint64) {
 	t.Helper()
 	bw := bitio.NewWriter()
-	buf := EncodeFrame(bw, p, si, ch, num)
+	buf := EncodeFrame(bw, NewWorkspace(len(ch[0]), len(ch), 12), p, si, ch, num)
 
 	var dst Frame
 	br := bitio.NewReader(bytes.NewReader(buf))
