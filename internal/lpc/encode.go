@@ -105,6 +105,52 @@ func BestFixedOrder(src []int32, maxOrder int) int {
 	return bestOrder
 }
 
+// FixedAbsSums fills sums[order] with the sum of |residual| of the order-th fixed
+// predictor (order 0..4), the order-th finite difference of src, in a single
+// pass. The first `order` samples are warmup (excluded from coding) and excluded
+// from the sum, matching FixedResidualsDiff(res, src, order) summed over
+// res[order:]. This is the analysis input to EstimateRiceBits for fixed-order
+// selection. The body is replaced by a SIMD kernel in a later task; this scalar
+// form is the reference. Allocation-free (writes through the caller's array).
+func FixedAbsSums(src []int32, sums *[5]uint64) {
+	*sums = [5]uint64{}
+	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
+	for i, v := range src {
+		e0 := int64(v)
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e4 := e3 - p4
+		sums[0] += absU64(e0)
+		if i >= 1 {
+			sums[1] += absU64(e1)
+		}
+		if i >= 2 {
+			sums[2] += absU64(e2)
+		}
+		if i >= 3 {
+			sums[3] += absU64(e3)
+		}
+		if i >= 4 {
+			sums[4] += absU64(e4)
+		}
+		p1, p2, p3, p4 = e0, e1, e2, e3
+	}
+}
+
+// absU64 returns the magnitude of v as a uint64. It is correct for the entire
+// int64 range, including math.MinInt64 (wrapping negation then a uint64 cast
+// yields the right bit pattern). Callers feeding finite differences must ensure
+// those differences do not overflow int64 first; for FLAC's max 32-bit samples
+// the order-4 difference is bounded near 2^35, so this holds for FixedAbsSums
+// and the future FixedAbsSums64 (whose int64 inputs are 32-bit sample values).
+func absU64(v int64) uint64 {
+	if v < 0 {
+		return uint64(-v)
+	}
+	return uint64(v)
+}
+
 // BestFixedOrder64 is the int64 analogue of BestFixedOrder.
 func BestFixedOrder64(src []int64, maxOrder int) int {
 	if maxOrder > 4 {
