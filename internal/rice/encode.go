@@ -10,6 +10,11 @@ const (
 	maxParam4  = 14 // method 0 (4-bit param), 15 is escape4
 	maxParam5  = 30 // method 1 (5-bit param), 31 is escape5
 	maxRawBits = 31 // escape width field is 5 bits (0..31)
+	// maxPartitionOrder is the largest order the 4-bit partition-order field can
+	// hold. feasiblePmax clamps to it so a caller passing a larger
+	// Params.MaxPartitionOrder can never make WritePlanned write a truncated
+	// order (e.g. 16 wrapping to 0) and corrupt the stream.
+	maxPartitionOrder = 15
 )
 
 // zigzag maps a signed residual to the unsigned value the bitstream stores. It is
@@ -64,12 +69,16 @@ func (s *Scratch) ensure(parts, ncols int) {
 }
 
 // feasiblePmax returns the largest feasible partition order for a block of the
-// given size and predictor order, capped at maxPartOrder. It reproduces the pmax
-// loop from the legacy planResidual: an order is feasible only when blockSize is
-// divisible by 2^po and the resulting partition length is at least predOrder and
-// nonzero (the contiguous prefix property). It depends only on these three ints,
-// not on the residual values.
+// given size and predictor order, capped at maxPartOrder and never above
+// maxPartitionOrder (the 4-bit field limit). It reproduces the pmax loop from
+// the legacy planResidual: an order is feasible only when blockSize is divisible
+// by 2^po and the resulting partition length is at least predOrder and nonzero
+// (the contiguous prefix property). It depends only on these three ints, not on
+// the residual values.
 func feasiblePmax(blockSize, predOrder, maxPartOrder int) int {
+	if maxPartOrder > maxPartitionOrder {
+		maxPartOrder = maxPartitionOrder
+	}
 	pmax := 0
 	for po := 1; po <= maxPartOrder; po++ {
 		if blockSize%(1<<po) != 0 {

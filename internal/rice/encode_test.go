@@ -78,6 +78,31 @@ func TestRiceBitsNoInt32Overflow(t *testing.T) {
 	}
 }
 
+// TestFeasiblePmaxClampsTo15 pins the partition-order ceiling at 15. The FLAC
+// partition-order field is 4 bits, so feasiblePmax must never return an order
+// above 15 even when the caller passes a larger maxPartOrder and the block is
+// divisible by a higher power of two. Without the clamp, WritePlanned would
+// write the chosen order into the 4-bit field with bw.WriteBits(po, 4) and
+// truncate it (e.g. 16 -> 0), corrupting the stream. paramsForLevel only ever
+// sets 3..6 today, so this guards a forward-looking config path.
+func TestFeasiblePmaxClampsTo15(t *testing.T) {
+	cases := []struct {
+		blockSize, predOrder, maxPartOrder, want int
+	}{
+		{65536, 0, 20, 15},   // 2^16 divisible: unclamped feasiblePmax would be 16
+		{1 << 20, 0, 25, 15}, // 2^20 divisible: unclamped would be 20
+		{1 << 18, 4, 18, 15}, // partLen at po=15 is 8 >= predOrder 4; unclamped would be 16
+		{4096, 0, 6, 6},      // normal level-3 case: clamp does not change it
+		{4096, 0, 20, 12},    // 4096 = 2^12, so divisibility caps pmax at 12 below the clamp
+	}
+	for _, c := range cases {
+		if got := feasiblePmax(c.blockSize, c.predOrder, c.maxPartOrder); got != c.want {
+			t.Errorf("feasiblePmax(%d, %d, %d) = %d, want %d",
+				c.blockSize, c.predOrder, c.maxPartOrder, got, c.want)
+		}
+	}
+}
+
 func TestCostMatchesWrittenBits(t *testing.T) {
 	res := []int32{0, 5, -5, 12, -12, 3, -3, 9}
 	bw := bitio.NewWriter()
