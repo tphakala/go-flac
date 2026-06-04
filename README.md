@@ -180,6 +180,36 @@ enc, err := pcm.NewEncoder(w, pcm.Config{SampleRate: 44100, BitDepth: 16, Channe
 // so STREAMINFO totals and MD5 can be written back after encoding.
 ```
 
+## Command-line example
+
+`cmd/wav2flac` encodes a PCM WAV file to FLAC with the streaming encoder. It is a
+runnable demo of the API and the go-flac side of the benchmark harness below:
+
+```bash
+go run ./cmd/wav2flac -level 5 input.wav output.flac
+```
+
+It accepts integer PCM WAV input (for example `pcm_s16le`, `s24`, `s32`);
+IEEE-float WAV is rejected.
+
+## Benchmarking
+
+`scripts/bench-encoders.sh` compares go-flac against libFLAC, SoX, and ffmpeg on
+the same input (encode, level 5, single-threaded), reporting wall time, CPU
+seconds, peak RSS, throughput, and compression ratio. With no argument it
+generates a deterministic 30-minute input so runs are reproducible across
+machines:
+
+```bash
+scripts/bench-encoders.sh          # generated reproducible input
+scripts/bench-encoders.sh my.wav   # your own WAV
+```
+
+It requires GNU `time`; `flac`, `sox`, and `ffmpeg` are each optional and skipped
+if absent. On reference hardware (i7-1260P, level 5, single-threaded) the pure-Go
+encoder matches libFLAC's compression ratio while running several times slower;
+SIMD acceleration to close that gap is the v0.2.0 track.
+
 ## License
 
 MIT. See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md). go-flac is an
