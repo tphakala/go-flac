@@ -56,7 +56,7 @@ func oneFrameBytes(t *testing.T) ([]byte, flac.StreamInfo) {
 		ch[1][i] = int32(64 - i)
 	}
 	bw := bitio.NewWriter()
-	buf := EncodeFrame(bw, Params{}, si, ch, 0)
+	buf := EncodeFrame(bw, NewWorkspace(len(ch[0]), len(ch), 12), Params{}, si, ch, 0)
 	out := make([]byte, len(buf))
 	copy(out, buf)
 	return out, si

@@ -58,7 +58,8 @@ func TestAllEqual64AndShiftRight64(t *testing.T) {
 
 func TestChooseFixedOrder64Runs(t *testing.T) {
 	s := wideSamples(512, 30, 1)
-	o, bitsCost := chooseFixedOrder64(s, paramsLevel(t, 5))
+	var ws Workspace
+	o, bitsCost := chooseFixedOrder64(&ws, s, paramsLevel(t, 5))
 	if o < 0 || o > 4 || bitsCost <= 0 {
 		t.Fatalf("chooseFixedOrder64 = (%d,%d)", o, bitsCost)
 	}
@@ -71,11 +72,12 @@ func TestWriteSubframe64RoundTrip(t *testing.T) {
 		s := wideSamples(1024, bps, int64(bps))
 		p := paramsLevel(t, 8)
 		win := apodizationWindow(p, len(s))
-		plan := planSubframe64(s, bps, p, win)
+		var ws Workspace
+		plan := planSubframe64(&ws, 0, s, bps, p, win)
 
 		bw := bitio.NewWriter()
 		bw.Reset()
-		writeSubframe64(bw, s, bps, plan, p)
+		writeSubframe64(bw, &ws, s, bps, &plan, p)
 		bw.AlignByte()
 
 		br := bitio.NewReader(bytesReaderFrame(bw.Bytes()))

@@ -17,7 +17,7 @@ func TestDecodeWideMonoRoundTrip(t *testing.T) {
 		si := flac.StreamInfo{SampleRate: 48000, Channels: 1, BitDepth: bps}
 
 		bw := bitio.NewWriter()
-		data := EncodeFrame(bw, p, si, [][]int32{mono}, 0)
+		data := EncodeFrame(bw, NewWorkspace(len(mono), 1, 12), p, si, [][]int32{mono}, 0)
 
 		var fr Frame
 		br := bitio.NewReader(bytesReaderFrame(data))
@@ -48,7 +48,7 @@ func TestDecodeWideMixedAssignmentReuseFrame(t *testing.T) {
 	la := asInt32(wideSamples(bs, bps, 1))
 	ra := asInt32(wideSamples(bs, bps, 2)) // uncorrelated
 	bwA := bitio.NewWriter()
-	dataA := EncodeFrame(bwA, paramsLevel(t, 0), si, [][]int32{la, ra}, 0)
+	dataA := EncodeFrame(bwA, NewWorkspace(len(la), 2, 12), paramsLevel(t, 0), si, [][]int32{la, ra}, 0)
 	if err := Decode(bitio.NewReader(bytesReaderFrame(dataA)), si, &fr); err != nil {
 		t.Fatalf("frame A decode: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestDecodeWideMixedAssignmentReuseFrame(t *testing.T) {
 		rb[i] = lb[i] - int32(i%5) + 2
 	}
 	bwB := bitio.NewWriter()
-	dataB := EncodeFrame(bwB, paramsLevel(t, 8), si, [][]int32{lb, rb}, 1)
+	dataB := EncodeFrame(bwB, NewWorkspace(len(lb), 2, 12), paramsLevel(t, 8), si, [][]int32{lb, rb}, 1)
 	if err := Decode(bitio.NewReader(bytesReaderFrame(dataB)), si, &fr); err != nil {
 		t.Fatalf("frame B decode: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestDecodeWideStereoRoundTrip(t *testing.T) {
 		si := flac.StreamInfo{SampleRate: 96000, Channels: 2, BitDepth: bps}
 
 		bw := bitio.NewWriter()
-		data := EncodeFrame(bw, p, si, [][]int32{l, r}, 0)
+		data := EncodeFrame(bw, NewWorkspace(len(l), 2, 12), p, si, [][]int32{l, r}, 0)
 
 		var fr Frame
 		br := bitio.NewReader(bytesReaderFrame(data))

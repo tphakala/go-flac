@@ -27,7 +27,7 @@ func TestEncodeStereo64RoundTrip32(t *testing.T) {
 
 	bw := bitio.NewWriter()
 	bw.Reset()
-	encodeStereo64(bw, p, bps, bs, l, r, 0)
+	encodeStereo64(bw, NewWorkspace(bs, 2, 12), p, bps, bs, l, r, 0)
 	data := bw.Bytes()
 
 	var fr Frame
@@ -54,7 +54,7 @@ func TestEncodeFrameWideMono(t *testing.T) {
 	si := flac.StreamInfo{SampleRate: 48000, Channels: 1, BitDepth: bps}
 
 	bw := bitio.NewWriter()
-	data := EncodeFrame(bw, p, si, [][]int32{mono}, 0)
+	data := EncodeFrame(bw, NewWorkspace(len(mono), 1, 12), p, si, [][]int32{mono}, 0)
 	if len(data) == 0 {
 		t.Fatal("EncodeFrame produced no bytes")
 	}

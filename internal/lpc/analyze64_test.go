@@ -19,8 +19,12 @@ func TestAnalyzeLPCGenericParity(t *testing.T) {
 		s32[i] = v
 		s64[i] = int64(v)
 	}
-	o32, sh32, qc32, ok32 := AnalyzeLPC(s32, win, 8, 15, 22)
-	o64, sh64, qc64, ok64 := AnalyzeLPC(s64, win, 8, 15, 22)
+	sc := NewScratch(n, 8)
+	var qb32, qb64 [32]int32
+	o32, sh32, qn32, ok32 := AnalyzeLPC(s32, win, 8, 15, 22, sc, qb32[:])
+	o64, sh64, qn64, ok64 := AnalyzeLPC(s64, win, 8, 15, 22, sc, qb64[:])
+	qc32 := qb32[:qn32]
+	qc64 := qb64[:qn64]
 	if ok32 != ok64 || o32 != o64 || sh32 != sh64 {
 		t.Fatalf("parity: int32 (%v,%d,%d) vs int64 (%v,%d,%d)", ok32, o32, sh32, ok64, o64, sh64)
 	}
