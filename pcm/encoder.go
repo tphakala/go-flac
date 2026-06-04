@@ -167,6 +167,14 @@ func (e *Encoder) Write(p []byte) (int, error) {
 		if err := e.emitBlock(e.carry, encoderBlockSize); err != nil {
 			return 0, err // boundary block failed: no bytes of p durably consumed
 		}
+		// Bound the retained carry capacity: a future Write refactor should not
+		// be able to permanently pin an oversized backing array (issue #5 item 2).
+		// The current code assembles carry as exactly one block, so this guard is
+		// defensive and never trips in practice, but it guarantees the bound by
+		// construction after every step-1 emit.
+		if cap(e.carry) > 2*blockBytes {
+			e.carry = make([]byte, 0, blockBytes)
+		}
 		e.leftover = e.leftover[:0]
 		p = p[need:]
 		written = need
