@@ -195,22 +195,20 @@ func writeFixed(bw *bitio.Writer, ws *Workspace, s []int32, bps int, plan *subfr
 	rice.WritePlanned(bw, c.res[:len(s)-order], order, len(s), c.plans, plan.riceParamBits)
 }
 
-// chooseFixedOrder returns the fixed predictor order to use for shifted together
-// with the Rice cost (in bits) of that order's residuals, so the caller does not
-// have to recompute the residuals to learn their cost.
-//
-//nolint:dupl // intentional: typed parallel of chooseFixedOrder64
+// chooseFixedOrder selects the fixed predictor order by estimated Rice cost
+// (abs-sum of each order's residual) and returns that estimate. The winning
+// subframe's residual is priced exactly by PlanResidualInt32 in planSubframe, so
+// this estimate only ranks candidates. ExhaustiveFixed, when set, prices every
+// order with a full Rice search for a marginally tighter pick.
 func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits int) {
+	maxOrder := min(4, len(shifted)-1)
+	if maxOrder < 0 {
+		return 0, 0
+	}
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
-		maxOrder := min(4, len(shifted)-1)
-		res := ws.ensureCostRes(len(shifted)) // reused across orders
+		res := ws.ensureCostRes(len(shifted))
 		for o := 0; o <= maxOrder; o++ {
-			// FixedResidualsDiff writes [warmup | residual] into res, so the residual
-			// slice is res[o:]. Order 0's residual is the samples themselves, so pass
-			// shifted directly (CostResidual only reads it) and skip the differencing.
-			// res[o:] holds the same values ComputeFixedResiduals(res[:len-o], ...)
-			// produced, so the chosen order and its cost are byte-identical.
 			var r []int32
 			if o == 0 {
 				r = shifted
@@ -225,19 +223,18 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 		}
 		return bestOrder, bestBits
 	}
-	order = lpc.BestFixedOrder(shifted, 4)
-	// Same [warmup | residual] handling as the exhaustive branch: residuals are
-	// res[order:], order 0's residual is shifted itself. Cost-only; the winner's
-	// residuals are recomputed by the scalar path in planSubframe.
-	res := ws.ensureCostRes(len(shifted))
-	var r []int32
-	if order == 0 {
-		r = shifted
-	} else {
-		lpc.FixedResidualsDiff(res, shifted, order)
-		r = res[order:len(shifted)]
+	var sums [5]uint64
+	lpc.FixedAbsSums(shifted, &sums)
+	bestOrder, bestBits := 0, int(^uint(0)>>1)
+	for o := 0; o <= maxOrder; o++ {
+		// zigzag is approximately 2|r|; EstimateRiceBits wants the sum of zigzag, so
+		// double the abs-sum.
+		b := rice.EstimateRiceBits(2*sums[o], len(shifted)-o)
+		if b < bestBits {
+			bestBits, bestOrder = b, o
+		}
 	}
-	return order, rice.CostResidual(r, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
+	return bestOrder, bestBits
 }
 
 // chooseLPCPlan runs LPC analysis on the wasted-bits-shifted samples and, if

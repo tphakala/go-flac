@@ -62,25 +62,3 @@ func TestFixedAbsSumsZeroAlloc(t *testing.T) {
 		t.Fatalf("FixedAbsSums allocated %v times", a)
 	}
 }
-
-func TestBestFixedOrderPicksLowResidual(t *testing.T) {
-	// Linear ramp: second differences are all zero, so order 2 achieves sum=0 and wins.
-	ramp := []int32{0, 10, 20, 30, 40, 50, 60, 70}
-	if got := BestFixedOrder(ramp, 4); got != 2 {
-		t.Fatalf("BestFixedOrder(ramp)=%d, want 2", got)
-	}
-
-	// Constant: order 0 residuals are all 9 (sum=54), order 1 residuals are all 0 (sum=0).
-	// The function must pick order 1 as the first order achieving the minimum.
-	constant := []int32{9, 9, 9, 9, 9, 9}
-	if got := BestFixedOrder(constant, 4); got != 1 {
-		t.Fatalf("BestFixedOrder(constant)=%d, want 1", got)
-	}
-
-	// Alternating-step signal: first differences alternate [+10, -1, +10, -1, ...].
-	// Order 1 sum=43 is less than order 0 sum=148 and order 2 sum=66, so order 1 wins.
-	alt := []int32{0, 10, 9, 19, 18, 28, 27, 37}
-	if got := BestFixedOrder(alt, 4); got != 1 {
-		t.Fatalf("BestFixedOrder(alt)=%d, want 1", got)
-	}
-}

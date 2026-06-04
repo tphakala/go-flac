@@ -63,48 +63,6 @@ func ComputeLPCResiduals64(res, src []int64, qcoeff []int32, shift, order int) {
 	}
 }
 
-// BestFixedOrder returns the fixed order in [0, maxOrder] (capped at 4 and at
-// len(src)-1) whose residuals have the smallest sum of absolute values. Any order
-// round-trips; this only chooses the most compressible one cheaply.
-func BestFixedOrder(src []int32, maxOrder int) int {
-	if maxOrder > 4 {
-		maxOrder = 4
-	}
-	if maxOrder > len(src)-1 {
-		maxOrder = len(src) - 1
-	}
-	if maxOrder < 0 {
-		return 0
-	}
-	bestOrder, bestSum := 0, int64(-1)
-	res := make([]int32, len(src))
-	for order := range maxOrder + 1 {
-		// FixedResidualsDiff writes [warmup | residual], so the residuals are
-		// res[order:]; order 0's residual is src itself. The order this selects is
-		// byte-identical to the scalar path because the residuals, and thus their
-		// absolute-value sum, are bit-identical.
-		var r []int32
-		if order == 0 {
-			r = src
-		} else {
-			FixedResidualsDiff(res, src, order)
-			r = res[order:]
-		}
-		var sum int64
-		for _, v := range r {
-			if v < 0 {
-				sum -= int64(v)
-			} else {
-				sum += int64(v)
-			}
-		}
-		if bestSum < 0 || sum < bestSum {
-			bestSum, bestOrder = sum, order
-		}
-	}
-	return bestOrder
-}
-
 // FixedAbsSums fills sums[order] with the sum of |residual| of the order-th fixed
 // predictor (order 0..4), the order-th finite difference of src, in a single
 // pass. The first `order` samples are warmup (excluded from coding) and excluded
