@@ -349,7 +349,9 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 
 	P := 1 << pmax
 	sc.ensure(P, ncols)
-	clear(sc.sums[:P*ncols]) // sums is accumulated with += and reused, so zero it first.
+	// No pre-zeroing: buildFinestTablesInt32 fully overwrites every sums row via
+	// partitionSums (which writes all ncols columns, even for empty partitions),
+	// unlike the int64 path below which accumulates with += and must be cleared.
 	buildFinestTablesInt32(sc, res, blockSize, predOrder, pmax, ncols)
 
 	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
@@ -474,20 +476,32 @@ func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax
 		if p == 0 {
 			n -= predOrder
 		}
-		// row aliases this partition's sums columns (ncols == kHi+1); hoisting the
-		// slice out of the per-residual loop and ranging over it drops the per-element
-		// bounds check on row[k], and the & 63 mask drops the oversized-shift guard
-		// (k is always <= kHi <= maxParam5 = 30). Byte-identical to sums[base+k] += u>>k.
+		part := res[idx : idx+n]
+		// row holds this partition's sums columns (ncols == kHi+1). partitionSums
+		// fills row[k] = Σ_j zigzag(part[j])>>k via SIMD, fully overwriting it. This
+		// is byte-identical to the scalar sums[base+k] += u>>k accumulation the
+		// per-order rescan used, so the merge-upward search and the chosen plans are
+		// unchanged. row is fully written even when n == 0 (empty partition -> zeros),
+		// so the int32 path needs no caller-side pre-zeroing (the int64 builder still
+		// accumulates with += and is cleared by PlanResidualInt64).
 		row := sc.sums[p*ncols : p*ncols+ncols]
+		partitionSums(row, part)
+		// maxU is the largest zigzag in the partition. zigzag is V-shaped (monotonic
+		// in magnitude on each side), so the maximum is reached at the most-negative
+		// or most-positive residual; finding those two extremes and zigzagging only
+		// them avoids a zigzag per residual. Byte-identical to max over all zigzags.
 		var mu uint64
-		for j := range n {
-			u := zigzag(res[idx+j])
-			if u > mu {
-				mu = u
+		if n > 0 {
+			lo, hi := part[0], part[0]
+			for _, r := range part {
+				if r < lo {
+					lo = r
+				}
+				if r > hi {
+					hi = r
+				}
 			}
-			for k := range row {
-				row[k] += u >> (uint(k) & 63)
-			}
+			mu = max(zigzag(lo), zigzag(hi))
 		}
 		sc.maxU[p] = mu
 		idx += n
