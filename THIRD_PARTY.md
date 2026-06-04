@@ -36,5 +36,7 @@ not a copy.
 
 ## SIMD
 
-- github.com/tphakala/simd: this project's own SIMD library, consumed as a
-  normal Go module dependency in a later milestone.
+- github.com/tphakala/simd: this project's own SIMD library. It is not a
+  dependency of the v0.1.0 pure-Go release; SIMD acceleration is planned for the
+  v0.2.0 track, where it will be consumed as a normal Go module dependency behind
+  a pure-Go fallback.

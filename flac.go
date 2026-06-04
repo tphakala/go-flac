@@ -2,15 +2,12 @@ package flac
 
 import "errors"
 
-// Version is the current library version. go-flac follows semantic
-// versioning; "0.0.0-dev" marks the pre-release groundwork skeleton.
-const Version = "0.0.0-dev"
+// Version is the current library version. go-flac follows semantic versioning.
+const Version = "0.1.0"
 
 // Sentinel errors returned by the decoder and the pcm streaming layer.
 // Callers can test for them with errors.Is.
 var (
-	// ErrNotImplemented marks API surfaces whose behavior is not yet built.
-	ErrNotImplemented = errors.New("go-flac: not implemented")
 	// ErrSeekUnsupported is returned by SeekToSample when the source is not seekable.
 	ErrSeekUnsupported = errors.New("go-flac: seek unsupported (source is not an io.Seeker)")
 	// ErrMissingStreamInfo means the stream had no STREAMINFO metadata block, or it did

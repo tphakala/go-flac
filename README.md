@@ -4,9 +4,10 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/go-flac.svg)](https://pkg.go.dev/github.com/tphakala/go-flac)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Native, pure-Go FLAC encoder and decoder. No CGO, no external binaries. SIMD
-accelerated via [github.com/tphakala/simd](https://github.com/tphakala/simd)
-behind a pure-Go fallback, with a simple high-level PCM streaming API.
+Native, pure-Go FLAC encoder and decoder. No CGO, no external binaries, zero
+runtime dependencies, with a simple high-level PCM streaming API. SIMD
+acceleration (via [github.com/tphakala/simd](https://github.com/tphakala/simd)
+behind a pure-Go fallback) is planned for the v0.2.0 track; v0.1.0 is pure-Go.
 
 ## Install
 
@@ -47,7 +48,7 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
   internal frame resync for seek landing, truncated-stream detection
   (ErrTruncatedStream), and opt-in SEEKTABLE emission (Config.SeekTableInterval,
   requires an io.WriteSeeker). A present SEEKTABLE accelerates seeks; binary search
-  is the fallback.
+  is the fallback. (done)
 - M5a Encoder performance: a per-encoder reusable scratch `Workspace` plus the
   libFLAC merge-upward Rice partition search. The workspace removes the per-frame
   and per-subframe heap allocations; the merge-upward search computes the
@@ -55,10 +56,15 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
   the residuals per partition order. Output is byte-identical to before; steady-
   state per-block allocations drop to about zero and level-5 16-bit stereo encode
   throughput improves roughly 65% (about 25.5 ms/op to 15.3 ms/op on the
-  reference benchmark). (done)
-- M5b SIMD integration: wire the github.com/tphakala/simd integer and float
-  primitives behind runtime dispatch with pure-Go fallbacks.
-- M6 completeness and v0.1.0.
+  reference benchmark). A follow-up hardening pass clamps the Rice partition order
+  to 15 and defers the STREAMINFO MD5 ingest until after each frame is durably
+  written, both preserving the byte-identical output. (done)
+- M6 completeness and v0.1.0: public-API and godoc review, provenance and license
+  audit, and the full pre-release validation gate. This is the first tagged
+  release: a feature-complete, pure-Go codec. (done)
+- v0.2.0 (next): SIMD integration. Wire the github.com/tphakala/simd integer and
+  float primitives behind runtime dispatch with pure-Go fallbacks, gated on a
+  measured end-to-end speedup.
 
 `SeekToSample` is sample-accurate and requires an io.Seeker; it returns
 `ErrSeekUnsupported` when the source is not seekable and `ErrInvalidSeek` on a
