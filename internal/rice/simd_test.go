@@ -148,6 +148,9 @@ func TestPartitionSumsParity(t *testing.T) {
 		for _, m := range widths {
 			got := make([]uint64, m)
 			want := make([]uint64, m)
+			for i := range got {
+				got[i] = ^uint64(0) // sentinel: partitionSums must fully overwrite, incl. n==0
+			}
 			partitionSums(got, res)
 			for _, r := range res {
 				u := zigzag(r)

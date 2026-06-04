@@ -39,11 +39,14 @@ func partitionSums(sums []uint64, res []int32) {
 	hi := sums[simdParamCount:]              // columns 15..len-1, scalar tail
 	clear(hi)                                // i32.RiceSums overwrote only the low columns
 	for _, r := range res {
-		u := zigzag(r)
+		// Column simdParamCount+j wants zigzag(r) >> (simdParamCount+j). Pre-shift by
+		// simdParamCount once, then a constant >>1 per column walks the remaining
+		// shifts: this replaces the per-iteration variable shift (and its x86 CL
+		// register setup plus the < 64 guard) with an add. Bit-identical.
+		u := zigzag(r) >> simdParamCount
 		for j := range hi {
-			// j+simdParamCount is the real Rice parameter k (<= maxParam5 = 30); the
-			// & 63 mask proves k < 64 so the compiler drops the oversized-shift guard.
-			hi[j] += u >> (uint(j+simdParamCount) & 63)
+			hi[j] += u
+			u >>= 1
 		}
 	}
 }
