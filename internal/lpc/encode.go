@@ -63,75 +63,86 @@ func ComputeLPCResiduals64(res, src []int64, qcoeff []int32, shift, order int) {
 	}
 }
 
-// BestFixedOrder returns the fixed order in [0, maxOrder] (capped at 4 and at
-// len(src)-1) whose residuals have the smallest sum of absolute values. Any order
-// round-trips; this only chooses the most compressible one cheaply.
-func BestFixedOrder(src []int32, maxOrder int) int {
-	if maxOrder > 4 {
-		maxOrder = 4
-	}
-	if maxOrder > len(src)-1 {
-		maxOrder = len(src) - 1
-	}
-	if maxOrder < 0 {
-		return 0
-	}
-	bestOrder, bestSum := 0, int64(-1)
-	res := make([]int32, len(src))
-	for order := range maxOrder + 1 {
-		// FixedResidualsDiff writes [warmup | residual], so the residuals are
-		// res[order:]; order 0's residual is src itself. The order this selects is
-		// byte-identical to the scalar path because the residuals, and thus their
-		// absolute-value sum, are bit-identical.
-		var r []int32
-		if order == 0 {
-			r = src
-		} else {
-			FixedResidualsDiff(res, src, order)
-			r = res[order:]
+// FixedAbsSums fills sums[order] with the sum of |residual| of the order-th fixed
+// predictor (order 0..4), the order-th finite difference of src, in a single
+// pass. The first `order` samples are warmup (excluded from coding) and excluded
+// from the sum, matching FixedResidualsDiff(res, src, order) summed over
+// res[order:]. This is the analysis input to EstimateRiceBits for fixed-order
+// selection. The body is replaced by a SIMD kernel in a later task; this scalar
+// form is the reference. Allocation-free (writes through the caller's array).
+func FixedAbsSums(src []int32, sums *[5]uint64) {
+	// Accumulate into a local array and store once at the end. Writing through
+	// *sums every iteration would force the accumulators to memory (the compiler
+	// cannot prove sums does not alias src), so locals keep them in registers
+	// across the hot loop.
+	var s [5]uint64
+	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
+	for i, v := range src {
+		e0 := int64(v)
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e4 := e3 - p4
+		s[0] += absU64(e0)
+		if i >= 1 {
+			s[1] += absU64(e1)
 		}
-		var sum int64
-		for _, v := range r {
-			if v < 0 {
-				sum -= int64(v)
-			} else {
-				sum += int64(v)
-			}
+		if i >= 2 {
+			s[2] += absU64(e2)
 		}
-		if bestSum < 0 || sum < bestSum {
-			bestSum, bestOrder = sum, order
+		if i >= 3 {
+			s[3] += absU64(e3)
 		}
+		if i >= 4 {
+			s[4] += absU64(e4)
+		}
+		p1, p2, p3, p4 = e0, e1, e2, e3
 	}
-	return bestOrder
+	*sums = s
 }
 
-// BestFixedOrder64 is the int64 analogue of BestFixedOrder.
-func BestFixedOrder64(src []int64, maxOrder int) int {
-	if maxOrder > 4 {
-		maxOrder = 4
-	}
-	if maxOrder > len(src)-1 {
-		maxOrder = len(src) - 1
-	}
-	if maxOrder < 0 {
-		return 0
-	}
-	bestOrder, bestSum := 0, int64(-1)
-	res := make([]int64, len(src))
-	for order := range maxOrder + 1 {
-		r := res[:len(src)-order]
-		ComputeFixedResiduals64(r, src, order)
-		var sum int64
-		for _, v := range r {
-			if v < 0 {
-				sum -= v
-			} else {
-				sum += v
-			}
+// FixedAbsSums64 is the int64 analogue of FixedAbsSums: it fills sums[order] with
+// the sum of |residual| of the order-th fixed predictor (order 0..4) in a single
+// pass, excluding the first `order` warmup samples. The body is replaced by a SIMD
+// kernel in a later task; this scalar form is the reference. Allocation-free.
+func FixedAbsSums64(src []int64, sums *[5]uint64) {
+	// Accumulate into a local array and store once at the end (see FixedAbsSums
+	// for the register-residency rationale).
+	var s [5]uint64
+	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
+	for i, v := range src {
+		e0 := v
+		e1 := e0 - p1
+		e2 := e1 - p2
+		e3 := e2 - p3
+		e4 := e3 - p4
+		s[0] += absU64(e0)
+		if i >= 1 {
+			s[1] += absU64(e1)
 		}
-		if bestSum < 0 || sum < bestSum {
-			bestSum, bestOrder = sum, order
+		if i >= 2 {
+			s[2] += absU64(e2)
 		}
+		if i >= 3 {
+			s[3] += absU64(e3)
+		}
+		if i >= 4 {
+			s[4] += absU64(e4)
+		}
+		p1, p2, p3, p4 = e0, e1, e2, e3
 	}
-	return bestOrder
+	*sums = s
+}
+
+// absU64 returns the magnitude of v as a uint64. It is correct for the entire
+// int64 range, including math.MinInt64 (wrapping negation then a uint64 cast
+// yields the right bit pattern). Callers feeding finite differences must ensure
+// those differences do not overflow int64 first; for FLAC's max 32-bit samples
+// the order-4 difference is bounded near 2^35, so this holds for FixedAbsSums
+// and FixedAbsSums64 (whose int64 inputs are 32-bit sample values).
+func absU64(v int64) uint64 {
+	if v < 0 {
+		return uint64(-v)
+	}
+	return uint64(v)
 }

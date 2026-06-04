@@ -36,7 +36,7 @@ func goldenCase(t *testing.T, sampleRate, channels, bitDepth, level int) []byte 
 
 func TestInt32OutputUnchanged(t *testing.T) {
 	want := map[string]string{
-		"44100/1/16/5": "fac8ce89162247db6ff9ea876e79ff21615e0944dfadc1d195424071822d991d",
+		"44100/1/16/5": "eb19f43df34d8381de503f4c09118f810d24aa927cc7ffb2c88337c140eac100",
 		"44100/2/16/5": "f895dc6923243681cc0a7773e11b9731117a316204f6646480fb4f1c3886a9dd",
 		"48000/2/24/8": "497f00f0cf8f484008662efe8828a7e5d976a6998d4b99909aa6b7e141d24a1b",
 		"44100/2/16/0": "653959c8a80348a20fd18dd2bde25f23ee02bccc039ce1fb3ac053a03bb77164",

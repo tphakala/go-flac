@@ -48,12 +48,24 @@ func TestComputeFixedResiduals64InvertsRestore(t *testing.T) {
 	}
 }
 
-func TestBestFixedOrder64Runs(t *testing.T) {
-	src := make([]int64, 64)
-	for i := range src {
-		src[i] = int64(i) << 25 // smooth ramp favors a higher fixed order
+func TestFixedAbsSums64MatchesPerOrder(t *testing.T) {
+	x := make([]int64, 1024)
+	s := uint32(7)
+	for i := range x {
+		s = s*1103515245 + 12345
+		x[i] = int64(int32(s>>16) % 4096)
 	}
-	if o := BestFixedOrder64(src, 4); o < 0 || o > 4 {
-		t.Fatalf("BestFixedOrder64 = %d, want 0..4", o)
+	var got [5]uint64
+	FixedAbsSums64(x, &got)
+	for order := range 5 {
+		res := make([]int64, len(x)-order)
+		ComputeFixedResiduals64(res, x, order)
+		var want uint64
+		for _, v := range res {
+			want += absU64(v)
+		}
+		if got[order] != want {
+			t.Fatalf("order %d: FixedAbsSums64=%d want %d", order, got[order], want)
+		}
 	}
 }

@@ -10,10 +10,9 @@ type Config struct {
 	// matching libFLAC's level meaning. The zero value is level 0. Levels 0-2 use
 	// fixed predictors and differ only in stereo decorrelation: 0 codes channels
 	// independently, 1 uses adaptive mid-side, 2 searches all stereo modes. Levels
-	// 3-8 add LPC (linear predictive coding) with increasing maximum order, deeper
-	// residual-partition search, and, from level 4, exhaustive fixed-order
-	// selection, so they compress progressively better. Out-of-range values are
-	// clamped to 0-8.
+	// 3-8 add LPC (linear predictive coding) with increasing maximum order and
+	// deeper residual-partition search, so they compress progressively better.
+	// Out-of-range values are clamped to 0-8.
 	CompressionLevel int
 
 	// SeekTableInterval, when > 0, makes the encoder emit a SEEKTABLE with one seek

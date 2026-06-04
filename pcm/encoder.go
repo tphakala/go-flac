@@ -344,11 +344,11 @@ func paramsForLevel(level int) frame.Params {
 		1: {frame.StereoAdaptive, 3, false, 0, 0},
 		2: {frame.StereoFull, 3, false, 0, 0},
 		3: {frame.StereoFull, 4, false, 6, 15},
-		4: {frame.StereoFull, 4, true, 8, 15},
-		5: {frame.StereoFull, 5, true, 8, 15},
-		6: {frame.StereoFull, 6, true, 8, 15},
-		7: {frame.StereoFull, 6, true, 12, 15},
-		8: {frame.StereoFull, 6, true, 12, 15},
+		4: {frame.StereoFull, 4, false, 8, 15},
+		5: {frame.StereoFull, 5, false, 8, 15},
+		6: {frame.StereoFull, 6, false, 8, 15},
+		7: {frame.StereoFull, 6, false, 12, 15},
+		8: {frame.StereoFull, 6, false, 12, 15},
 	}
 	r := table[level]
 	return frame.Params{

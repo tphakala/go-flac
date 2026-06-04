@@ -1,6 +1,9 @@
 package crc
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
 
 func TestCRC8Check(t *testing.T) {
 	var c uint8
@@ -28,5 +31,34 @@ func TestChecksumHelpers(t *testing.T) {
 	}
 	if got := Checksum16([]byte("123456789")); got != 0xFEE8 {
 		t.Fatalf("Checksum16 = %#x", got)
+	}
+}
+
+func TestChecksum16SliceBy8MatchesScalar(t *testing.T) {
+	r := rand.New(rand.NewSource(1))
+	for _, n := range []int{0, 1, 7, 8, 9, 15, 16, 31, 64, 255, 4097} {
+		buf := make([]byte, n)
+		for i := range buf {
+			buf[i] = byte(r.Intn(256))
+		}
+		// scalarChecksum16 is the reference byte-at-a-time loop kept in the test.
+		var c uint16
+		for _, b := range buf {
+			c = (c << 8) ^ table16[byte(c>>8)^b]
+		}
+		if got := Checksum16(buf); got != c {
+			t.Fatalf("n=%d: Checksum16=%#04x want %#04x", n, got, c)
+		}
+	}
+}
+
+func BenchmarkChecksum16(b *testing.B) {
+	buf := make([]byte, 16384)
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	b.SetBytes(int64(len(buf)))
+	for b.Loop() {
+		_ = Checksum16(buf)
 	}
 }
