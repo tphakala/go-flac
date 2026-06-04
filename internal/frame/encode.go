@@ -35,7 +35,7 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 	case bps >= 25:
 		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
 		// so upcast each channel to int64 before planning and writing.
-		window := apodizationWindow(p, bs)
+		window := ws.window(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		buf := make([]int64, bs)
 		for c := range nch {
@@ -47,7 +47,7 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 		}
 		finishFrame(bw)
 	default:
-		window := apodizationWindow(p, bs)
+		window := ws.window(p, bs)
 		writeFrameHeader(bw, bs, nch-1, frameNum)
 		for c := range nch {
 			plan := planSubframe(ws, 0, ch[c], bps, p, window)
@@ -78,7 +78,7 @@ func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r [
 		side[i] = l[i] - r[i]
 		mid[i] = (l[i] + r[i]) >> 1
 	}
-	window := apodizationWindow(p, bs)
+	window := ws.window(p, bs)
 	planL := planSubframe(ws, 0, l, bps, p, window)
 	planR := planSubframe(ws, 1, r, bps, p, window)
 	planM := planSubframe(ws, 2, mid, bps, p, window)
@@ -151,7 +151,7 @@ func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32,
 		side[i] = li - ri
 		mid[i] = (li + ri) >> 1
 	}
-	window := apodizationWindow(p, bs)
+	window := ws.window(p, bs)
 	planL := planSubframe64(ws, 0, l, bps, p, window)
 	planR := planSubframe64(ws, 1, r, bps, p, window)
 	planM := planSubframe64(ws, 2, mid, bps, p, window)

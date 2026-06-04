@@ -59,11 +59,11 @@ type subframePlan struct {
 	kind          int // 0 constant, 1 verbatim, 2 fixed, 3 LPC
 	order         int // fixed predictor order (kind 2) or LPC order (kind 3)
 	wasted        int
-	bits          int     // estimated total subframe bits, for decorrelation selection
-	qcoeff        []int32 // LPC quantized coefficients (kind 3)
-	shift         int     // LPC quantization shift (kind 3)
-	cand          int     // workspace slot 0..3 holding this subframe's carried residuals+plan
-	riceParamBits int     // param-field width (4 or 5) of the carried plan
+	bits          int       // estimated total subframe bits, for decorrelation selection
+	qcoeff        [32]int32 // LPC quantized coefficients (kind 3); the first `order` entries are valid
+	shift         int       // LPC quantization shift (kind 3)
+	cand          int       // workspace slot 0..3 holding this subframe's carried residuals+plan
+	riceParamBits int       // param-field width (4 or 5) of the carried plan
 }
 
 // planSubframe chooses the cheapest subframe encoding for s at the given bps and
@@ -127,7 +127,7 @@ func planSubframe(ws *Workspace, idx int, s []int32, bps int, p Params, window [
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes(len(s) - best.order)
-		lpc.ComputeLPCResiduals(res, shifted, best.qcoeff, best.shift, best.order)
+		lpc.ComputeLPCResiduals(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
 		_, plans, paramBits, _ := rice.PlanResidualInt32(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
@@ -194,7 +194,7 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 	if p.ExhaustiveFixed {
 		bestOrder, bestBits := 0, int(^uint(0)>>1)
 		maxOrder := min(4, len(shifted)-1)
-		res := make([]int32, len(shifted)) // reused across orders
+		res := ws.ensureCostRes(len(shifted)) // reused across orders
 		for o := 0; o <= maxOrder; o++ {
 			r := res[:len(shifted)-o]
 			lpc.ComputeFixedResiduals(r, shifted, o)
@@ -206,7 +206,7 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 		return bestOrder, bestBits
 	}
 	order = lpc.BestFixedOrder(shifted, 4)
-	res := make([]int32, len(shifted)-order)
+	res := ws.ensureCostRes(len(shifted) - order)
 	lpc.ComputeFixedResiduals(res, shifted, order)
 	return order, rice.CostResidual(res, len(shifted), order, p.MaxPartitionOrder, &ws.rice)
 }
@@ -216,13 +216,14 @@ func chooseFixedOrder(ws *Workspace, shifted []int32, p Params) (order, resBits 
 // and the exact Rice residual cost (the residual cost only; the warmup, coeff,
 // precision and shift field bits are added by the caller). ok is false when LPC
 // is not applicable for this subframe.
-func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
-	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
+func chooseLPCPlan(ws *Workspace, shifted []int32, eff int, p Params, window []float64) (order int, qcoeff [32]int32, shift, resBits int, ok bool) {
+	var qc [32]int32
+	o, sh, _, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff, ws.lpcScratch(len(shifted)), qc[:])
 	if !aok {
-		return 0, nil, 0, 0, false
+		return 0, qc, 0, 0, false
 	}
-	res := make([]int32, len(shifted)-o)
-	lpc.ComputeLPCResiduals(res, shifted, qc, sh, o)
+	res := ws.ensureCostRes(len(shifted) - o)
+	lpc.ComputeLPCResiduals(res, shifted, qc[:o], sh, o)
 	return o, qc, sh, rice.CostResidual(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
 
@@ -291,13 +292,15 @@ func chooseFixedOrder64(ws *Workspace, shifted []int64, p Params) (order, resBit
 // chooseLPCPlan64 runs LPC analysis on the wasted-bits-shifted int64 samples and,
 // if applicable, returns the chosen order, its quantized coefficients and shift,
 // and the exact Rice residual cost. Mirrors chooseLPCPlan for wide bit-depth support.
-func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window []float64) (order int, qcoeff []int32, shift, resBits int, ok bool) {
-	o, sh, qc, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff)
+func chooseLPCPlan64(ws *Workspace, shifted []int64, eff int, p Params, window []float64) (order int, qcoeff [32]int32, shift, resBits int, ok bool) {
+	var qc [32]int32
+	o, sh, _, aok := lpc.AnalyzeLPC(shifted, window, p.MaxLPCOrder, p.LPCPrecision, eff, ws.lpcScratch(len(shifted)), qc[:])
 	if !aok {
-		return 0, nil, 0, 0, false
+		return 0, qc, 0, 0, false
 	}
+	// TODO(Task 6): route this cost-eval residual through a workspace int64 buffer.
 	res := make([]int64, len(shifted)-o)
-	lpc.ComputeLPCResiduals64(res, shifted, qc, sh, o)
+	lpc.ComputeLPCResiduals64(res, shifted, qc[:o], sh, o)
 	return o, qc, sh, rice.CostResidual64(res, len(shifted), o, p.MaxPartitionOrder, &ws.rice), true
 }
 
@@ -398,7 +401,7 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	case 3: // LPC
 		c := &ws.cand[idx]
 		res := c.ensureRes64(len(s) - best.order)
-		lpc.ComputeLPCResiduals64(res, shifted, best.qcoeff, best.shift, best.order)
+		lpc.ComputeLPCResiduals64(res, shifted, best.qcoeff[:best.order], best.shift, best.order)
 		_, plans, paramBits, _ := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits

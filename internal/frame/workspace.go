@@ -1,6 +1,9 @@
 package frame
 
-import "github.com/tphakala/go-flac/internal/rice"
+import (
+	"github.com/tphakala/go-flac/internal/lpc"
+	"github.com/tphakala/go-flac/internal/rice"
+)
 
 // candScratch holds one stereo candidate's carried scratch: the chosen residuals
 // and the chosen Rice partition plan, computed once in the planner and read back
@@ -43,6 +46,22 @@ type Workspace struct {
 	side64, mid64 []int64
 	// Rice planning scratch reused across subframes (zigzag sums, plans).
 	rice rice.Scratch
+	// LPC analysis float64 scratch, shared across subframes. Single-use per
+	// subframe: AnalyzeLPC fully overwrites every buffer before reading it, and
+	// the planner extracts the quantized coefficients (by value) and residuals
+	// before the next subframe runs, so sharing one Scratch is safe.
+	lpc *lpc.Scratch
+	// costRes is the shared transient residual buffer for the cost-evaluation
+	// passes in chooseFixedOrder/chooseLPCPlan. It holds only throwaway residuals
+	// used to price a candidate; the winner's residuals are recomputed into the
+	// per-candidate carry buffer afterward, so reusing one buffer here is safe.
+	costRes []int32
+	// Apodization-window cache. Only two distinct block lengths ever occur in a
+	// stream (the full block and the shorter final block), so two slots suffice.
+	// The window is deterministic, so caching it is byte-identical to recomputing
+	// it each frame.
+	apodN   [2]int
+	apodWin [2][]float64
 	// Per-candidate carried residuals + chosen plan. Slots 0..3 map to the four
 	// stereo candidates (0=L, 1=R, 2=M, 3=S); the independent and wide-independent
 	// paths use slot 0. Each slot owns distinct backing arrays so planning all four
@@ -51,15 +70,18 @@ type Workspace struct {
 }
 
 // NewWorkspace allocates a Workspace sized for the given maximum block size,
-// channel count, and maximum LPC order. maxOrder is reserved for later tasks.
+// channel count, and maximum LPC order. maxOrder sizes the LPC analysis scratch;
+// AnalyzeLPC clamps the effective order to the block size and 32, so a Workspace
+// built with the encoder's configured maxOrder serves every frame.
 func NewWorkspace(maxBlock, channels, maxOrder int) *Workspace {
 	_ = channels
-	_ = maxOrder
 	ws := &Workspace{
-		side:   make([]int32, maxBlock),
-		mid:    make([]int32, maxBlock),
-		side64: make([]int64, maxBlock),
-		mid64:  make([]int64, maxBlock),
+		side:    make([]int32, maxBlock),
+		mid:     make([]int32, maxBlock),
+		side64:  make([]int64, maxBlock),
+		mid64:   make([]int64, maxBlock),
+		lpc:     lpc.NewScratch(maxBlock, maxOrder),
+		costRes: make([]int32, maxBlock),
 	}
 	for i := range ws.cand {
 		ws.cand[i] = candScratch{
@@ -70,4 +92,51 @@ func NewWorkspace(maxBlock, channels, maxOrder int) *Workspace {
 		}
 	}
 	return ws
+}
+
+// window returns the apodization window of length n, building and caching it the
+// first time each distinct n is seen. Only the full block and the shorter final
+// block ever occur in a stream, so two slots suffice. The window is deterministic,
+// so caching is byte-identical to recomputing it each frame. Returns nil when LPC
+// is disabled (apodizationWindow returns nil); callers already guard window != nil.
+func (ws *Workspace) window(p Params, n int) []float64 {
+	for i := range 2 {
+		if ws.apodN[i] == n && ws.apodWin[i] != nil {
+			return ws.apodWin[i]
+		}
+	}
+	w := apodizationWindow(p, n)
+	if w == nil {
+		return nil
+	}
+	slot := 0
+	if ws.apodWin[0] != nil && ws.apodN[0] != n {
+		slot = 1
+	}
+	ws.apodN[slot] = n
+	ws.apodWin[slot] = w
+	return w
+}
+
+// ensureCostRes grows ws.costRes to hold at least n int32 cost-eval residuals and
+// returns the n-length prefix. Like candScratch.ensureRes, it is defensive against
+// a zero-value Workspace built directly in unit tests; NewWorkspace pre-sizes
+// costRes to maxBlock so the steady-state encoder never reallocates here.
+func (ws *Workspace) ensureCostRes(n int) []int32 {
+	if cap(ws.costRes) < n {
+		ws.costRes = make([]int32, n)
+	}
+	return ws.costRes[:n]
+}
+
+// lpcScratch returns the workspace LPC analysis scratch, lazily allocating it for
+// a zero-value Workspace (unit tests construct Workspace directly). NewWorkspace
+// always pre-builds it, so the steady-state encoder never allocates here. The lazy
+// scratch is sized to the largest order AnalyzeLPC ever uses (32), so it serves any
+// block up to maxBlock and any order, leaving the hot path allocation-free.
+func (ws *Workspace) lpcScratch(maxBlock int) *lpc.Scratch {
+	if ws.lpc == nil {
+		ws.lpc = lpc.NewScratch(maxBlock, 32)
+	}
+	return ws.lpc
 }

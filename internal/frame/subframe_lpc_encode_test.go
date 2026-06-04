@@ -42,8 +42,10 @@ func TestPlanSubframeSelectsLPC(t *testing.T) {
 	if plan.order < 1 || plan.order > 12 {
 		t.Fatalf("plan.order = %d out of [1,12]", plan.order)
 	}
-	if len(plan.qcoeff) != plan.order {
-		t.Fatalf("len(qcoeff) = %d, want %d", len(plan.qcoeff), plan.order)
+	// qcoeff is a fixed [32]int32 array; the first plan.order entries are valid.
+	// Check the order fits the array so the valid prefix is in bounds.
+	if plan.order > len(plan.qcoeff) {
+		t.Fatalf("plan.order = %d exceeds qcoeff capacity %d", plan.order, len(plan.qcoeff))
 	}
 	if plan.shift < 0 || plan.shift > 15 {
 		t.Fatalf("plan.shift = %d out of [0,15]", plan.shift)

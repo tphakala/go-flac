@@ -211,7 +211,10 @@ func TestAnalyzeLPCModelsCorrelatedSignal(t *testing.T) {
 	src := arSignal(4096)
 	window := TukeyWindow(len(src), 0.5)
 
-	order, shift, qc, ok := AnalyzeLPC(src, window, 12, 15, 16)
+	sc := NewScratch(len(src), 12)
+	var qbuf [32]int32
+	order, shift, qn, ok := AnalyzeLPC(src, window, 12, 15, 16, sc, qbuf[:])
+	qc := qbuf[:qn]
 	if !ok {
 		t.Fatal("ok = false, want true for a correlated signal")
 	}
@@ -259,7 +262,9 @@ func abs64(v int64) int64 {
 }
 
 func TestAnalyzeLPCShortBlock(t *testing.T) {
-	if _, _, _, ok := AnalyzeLPC([]int32{5}, []float64{1}, 8, 15, 16); ok {
+	sc := NewScratch(1, 8)
+	var qbuf [32]int32
+	if _, _, _, ok := AnalyzeLPC([]int32{5}, []float64{1}, 8, 15, 16, sc, qbuf[:]); ok {
 		t.Fatal("ok=true for 1-sample block, want false")
 	}
 }
@@ -267,7 +272,9 @@ func TestAnalyzeLPCShortBlock(t *testing.T) {
 func TestAnalyzeLPCSilence(t *testing.T) {
 	src := make([]int32, 256) // all zero -> autoc[0] == 0
 	window := TukeyWindow(len(src), 0.5)
-	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16); ok {
+	sc := NewScratch(len(src), 8)
+	var qbuf [32]int32
+	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16, sc, qbuf[:]); ok {
 		t.Fatal("ok=true for silence, want false")
 	}
 }
@@ -275,16 +282,18 @@ func TestAnalyzeLPCSilence(t *testing.T) {
 func TestAnalyzeLPCInvalidPrecision(t *testing.T) {
 	src := arSignal(256)
 	window := TukeyWindow(len(src), 0.5)
+	sc := NewScratch(len(src), 8)
+	var qbuf [32]int32
 	// precision 0 would hit 1<<(precision-1); precision 16 would emit the
 	// reserved 4-bit code 15. Both must cleanly skip LPC, not panic or encode
 	// an invalid subframe.
 	for _, prec := range []int{0, -1, 16, 32} {
-		if _, _, _, ok := AnalyzeLPC(src, window, 8, prec, 16); ok {
+		if _, _, _, ok := AnalyzeLPC(src, window, 8, prec, 16, sc, qbuf[:]); ok {
 			t.Fatalf("ok=true for precision %d, want false", prec)
 		}
 	}
 	// The supported precision (15) still works on the same signal.
-	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16); !ok {
+	if _, _, _, ok := AnalyzeLPC(src, window, 8, 15, 16, sc, qbuf[:]); !ok {
 		t.Fatal("ok=false for precision 15 on a correlated signal, want true")
 	}
 }
