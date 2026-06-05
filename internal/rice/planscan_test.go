@@ -156,10 +156,11 @@ func TestBuildFinestSumsInt32Parity(t *testing.T) {
 		want.ensure(P, ncols)
 		// got is left with a non-zero sentinel: buildFinestSumsInt32 must fully
 		// overwrite every column (it relies on partitionSums not pre-zeroing).
-		for i := range got.sums[:P*ncols] {
+		// ensure sized both sums slices to exactly P*ncols, so no reslice is needed.
+		for i := range got.sums {
 			got.sums[i] = ^uint64(0)
 		}
-		clear(want.sums[:P*ncols])
+		clear(want.sums)
 
 		buildFinestSumsInt32(&got, res, tc.blockSize, tc.predOrder, pmax, ncols)
 		refBuildFinestSums(&want, res, tc.blockSize, tc.predOrder, pmax, ncols)
