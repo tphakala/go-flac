@@ -62,3 +62,47 @@ func TestFixedAbsSumsZeroAlloc(t *testing.T) {
 		t.Fatalf("FixedAbsSums allocated %v times", a)
 	}
 }
+
+func TestFixedAbsSumsMatchesPerOrderEdgeCases(t *testing.T) {
+	// Exercises the cases a SIMD kernel must reproduce: short lengths where the
+	// order-k warmup exclusion (order k skips the first k samples) is the whole
+	// behavior, lengths straddling the vector width for tail handling, and
+	// magnitudes near the 24-bit domain (the encoder's int32 fixed-residual range,
+	// where FixedResidualsDiff is a valid independent reference). Run under
+	// GODEBUG=cpu.avx2=off too to assert SIMD/pure-Go parity.
+	const lim = int32(1) << 23 // 24-bit signed domain: residuals stay within int32
+	lengths := []int{0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 64}
+	s := uint32(0x12345)
+	for _, n := range lengths {
+		x := make([]int32, n)
+		for i := range x {
+			s = s*1103515245 + 12345
+			x[i] = int32(s%uint32(2*lim)) - lim // uniform over [-2^23, 2^23)
+		}
+		if n >= 2 { // force the extremes of the valid domain to the endpoints
+			x[0] = lim - 1
+			x[n-1] = -lim
+		}
+		var got [5]uint64
+		FixedAbsSums(x, &got)
+		for order := range 5 {
+			var want uint64
+			if order == 0 {
+				for _, v := range x {
+					want += absU64(int64(v))
+				}
+			} else {
+				res := make([]int32, len(x))
+				if order < len(x) {
+					FixedResidualsDiff(res, x, order)
+				}
+				for _, v := range res[min(order, len(x)):] {
+					want += absU64(int64(v))
+				}
+			}
+			if got[order] != want {
+				t.Fatalf("n=%d order %d: FixedAbsSums=%d want %d", n, order, got[order], want)
+			}
+		}
+	}
+}
