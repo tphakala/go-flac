@@ -6,12 +6,13 @@ import (
 	"testing"
 )
 
-// refBuildFinestTablesInt32 is the pre-SIMD scalar implementation of
-// buildFinestTablesInt32, kept verbatim as the parity oracle. The production
-// function delegates the per-partition sums to i32.RiceSums (AVX2/NEON/pure-Go)
-// and derives maxU from the residual extremes; this reference accumulates both
-// the slow, obvious way. The two must agree bit-for-bit for every input, which is
-// what guarantees the encoded FLAC stream is unchanged by the SIMD path.
+// refBuildFinestTablesInt32 is the pre-SIMD scalar implementation of the int32
+// finest-table pass, kept verbatim as the combined parity oracle. The production
+// path now splits this work: buildFinestSumsInt32 delegates the per-partition sums
+// to i32.RiceSums (AVX2/NEON/pure-Go) and finestMaxU derives maxU from the residual
+// extremes; this reference accumulates both the slow, obvious way. The two must
+// agree bit-for-bit for every input, which is what guarantees the encoded FLAC
+// stream is unchanged by the SIMD path.
 func refBuildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, ncols int) {
 	P := 1 << pmax
 	partLen := blockSize >> pmax
@@ -38,7 +39,7 @@ func refBuildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, p
 }
 
 // ncolsFor reproduces the column-count derivation in PlanResidualInt32 so the
-// parity test exercises buildFinestTablesInt32 with exactly the (pmax, ncols) the
+// parity test exercises buildFinestSumsInt32 with exactly the (pmax, ncols) the
 // encoder would use for res.
 func ncolsFor(res []int32) int {
 	var globalMaxU uint64
@@ -111,10 +112,13 @@ func TestBuildFinestTablesInt32_SIMDParity(t *testing.T) {
 		var got, want Scratch
 		got.ensure(P, ncols)
 		want.ensure(P, ncols)
-		clear(got.sums[:P*ncols])
 		clear(want.sums[:P*ncols])
 
-		buildFinestTablesInt32(&got, res, tc.blockSize, tc.predOrder, pmax, ncols)
+		// Drive the split int32 planner seams: finestMaxU fills the per-partition
+		// maxU, buildFinestSumsInt32 fills the SIMD sums. The combined scalar oracle
+		// computes both the slow way, so agreement proves the split is byte-identical.
+		finestMaxU(&got, res, tc.blockSize, tc.predOrder, pmax)
+		buildFinestSumsInt32(&got, res, tc.blockSize, tc.predOrder, pmax, ncols)
 		refBuildFinestTablesInt32(&want, res, tc.blockSize, tc.predOrder, pmax, ncols)
 
 		for i := range P * ncols {
