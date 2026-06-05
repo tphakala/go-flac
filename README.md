@@ -38,52 +38,6 @@ path (encoder and decoder), and the int32 output for <= 24 bps is byte-identical
 to before the wide-depth work. The encoder is allocation-light: a per-encoder
 reusable scratch buffer keeps steady-state per-block heap allocations near zero.
 
-- M1 Groundwork: skeleton, tooling, CI. (done)
-- M2 Decoder: bitstream, metadata, frame decode, Rice + predictor restore,
-  inter-channel decorrelation, public `pcm.Decoder`, MD5 + corpus validation. (done)
-- M3 Encoder: constant/verbatim/fixed predictors, four-way stereo decorrelation,
-  0-8 compression-level API, bit-exact round-trip, libFLAC cross-validation. (done)
-- M3b LPC: quantized linear-predictive coding, bringing levels 3-8 to their full
-  potential. (done)
-- M3c Wide bit-depth: 25-32 bps support end to end via an int64 encode path and
-  the completed int64 decoder dispatch, validated by round-trip and libFLAC
-  cross-validation. (done)
-- M4 Streaming hardening: sample-accurate SeekToSample (requires an io.Seeker),
-  internal frame resync for seek landing, truncated-stream detection
-  (ErrTruncatedStream), and opt-in SEEKTABLE emission (Config.SeekTableInterval,
-  requires an io.WriteSeeker). A present SEEKTABLE accelerates seeks; binary search
-  is the fallback. (done)
-- M5a Encoder performance: a per-encoder reusable scratch `Workspace` plus the
-  libFLAC merge-upward Rice partition search. The workspace removes the per-frame
-  and per-subframe heap allocations; the merge-upward search computes the
-  partition sums once at the finest order and merges upward instead of rescanning
-  the residuals per partition order. Output is byte-identical to before; steady-
-  state per-block allocations drop to about zero and level-5 16-bit stereo encode
-  throughput improves roughly 65% (about 25.5 ms/op to 15.3 ms/op on the
-  reference benchmark). A follow-up hardening pass clamps the Rice partition order
-  to 15 and defers the STREAMINFO MD5 ingest until after each frame is durably
-  written, both preserving the byte-identical output. (done)
-- M6 completeness and v0.1.0: public-API and godoc review, provenance and license
-  audit, and the full pre-release validation gate. This is the first tagged
-  release: a feature-complete, pure-Go codec. (done)
-- v0.2.0: SIMD integration. The encoder's Rice partition cost search
-  (i32.RiceSums), fixed-predictor residuals and order selection (i32.Diff1-4), and
-  quantized-LPC residual cost evaluation (i32.LPCResidualEncode) dispatch to
-  github.com/tphakala/simd's AVX2/NEON kernels at runtime, with a pure-Go fallback.
-  Every kernel is bit-identical to the scalar path (parity tests assert this on
-  both the SIMD and pure-Go paths), so output stays byte-identical. Level-5 16-bit
-  stereo encode throughput improves roughly 2.7x (about 15.2 ms/op to 5.5 ms/op on
-  the reference benchmark). (done)
-- Single-core throughput: a series of byte-identical encoder optimizations on top
-  of the SIMD integration. Estimate-driven predictor selection; a 64-bit bit-writer
-  word flush with combined Rice quotient/remainder; SIMD-accelerated LPC
-  autocorrelation, estimate-path primitives (ZigzagSum, FixedAbsSums, RiceSums), and
-  per-partition min/max (finestMaxU); a wider 64-bit PCM deinterleave and per-order
-  fixed-predictor specialization in pure Go; and a CRC-16 carry-less-multiply fold
-  (PCLMULQDQ on amd64, PMULL on arm64) that retires the slice-by-16 table loop, the
-  last sizeable compute-bound scalar hot path. Each step is verified byte-for-byte
-  against the prior output. (done)
-
 `SeekToSample` is sample-accurate and requires an io.Seeker; it returns
 `ErrSeekUnsupported` when the source is not seekable and `ErrInvalidSeek` on a
 negative sample index. Mid-stream resync from a non-fLaC start position remains
@@ -224,10 +178,23 @@ scripts/bench-encoders.sh my.wav   # your own WAV
 ```
 
 It requires GNU `time`; `flac`, `sox`, and `ffmpeg` are each optional and skipped
-if absent. On reference hardware (i7-1260P, level 5, single-threaded) the encoder
-matches libFLAC's compression ratio. The SIMD integration and the byte-identical
-single-core throughput work above have substantially narrowed the speed gap; this
-script is the basis for tracking it.
+if absent.
+
+Results on the default input (deterministic 30-minute mono 48 kHz/16-bit mix,
+level 5, single-threaded); throughput is input MB/s, ratio is encoded size over
+input size:
+
+| Encoder | amd64 (i7-1260P) | arm64 (Cortex-A76) | Compression ratio |
+| ------- | ---------------: | -----------------: | :---------------: |
+| go-flac |        147 MB/s  |          51 MB/s   |      0.8523       |
+| libFLAC |        229 MB/s  |          76 MB/s   |      0.8523       |
+| SoX     |        194 MB/s  |          n/a       |      0.8519       |
+| ffmpeg  |        128 MB/s  |          48 MB/s   |      0.8519       |
+
+go-flac matches libFLAC's compression ratio exactly and beats ffmpeg on both
+throughput and ratio on each architecture; libFLAC's reference encoder remains
+about 1.5x faster. Numbers vary with hardware and input, so re-run the script to
+reproduce them on your own machine.
 
 ## License
 
