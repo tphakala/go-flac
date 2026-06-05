@@ -26,6 +26,87 @@ func TestFixedResidualRoundTrip(t *testing.T) {
 	}
 }
 
+// computeFixedResidualsRef is the original generic-coefficient-loop form, kept as
+// a byte-identical oracle for the order-specialized ComputeFixedResiduals. Both
+// accumulate the predictor in int64 and truncate to int32, so they must agree for
+// every int32 input regardless of overflow.
+func computeFixedResidualsRef(res, src []int32, order int) {
+	coeffs := fixedCoeffs[order]
+	for i := range res {
+		n := order + i
+		var pred int64
+		for j, c := range coeffs {
+			pred += c * int64(src[n-1-j])
+		}
+		res[i] = src[n] - int32(pred)
+	}
+}
+
+//nolint:dupl // intentional: typed parallel of TestComputeFixedResiduals64MatchesReference
+func TestComputeFixedResidualsMatchesReference(t *testing.T) {
+	var st uint32 = 0x9E3779B9
+	next := func() int32 {
+		st = st*1664525 + 1013904223
+		return int32(st) //nolint:gosec // intentional wraparound to span the int32 range
+	}
+	// Lengths straddle any unroll factor and include the minimum per order.
+	for _, length := range []int{4, 5, 6, 7, 8, 9, 16, 17, 31, 32, 33, 64, 100, 1023, 1024, 4096, 4097} {
+		src := make([]int32, length)
+		for i := range src {
+			src[i] = next()
+		}
+		for order := 0; order <= 4 && order < length; order++ {
+			want := make([]int32, length-order)
+			got := make([]int32, length-order)
+			computeFixedResidualsRef(want, src, order)
+			ComputeFixedResiduals(got, src, order)
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("order=%d len=%d i=%d: got %d, want %d", order, length, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
+func computeFixedResiduals64Ref(res, src []int64, order int) {
+	coeffs := fixedCoeffs[order]
+	for i := range res {
+		n := order + i
+		var pred int64
+		for j, c := range coeffs {
+			pred += c * src[n-1-j]
+		}
+		res[i] = src[n] - pred
+	}
+}
+
+//nolint:dupl // intentional: typed parallel of TestComputeFixedResidualsMatchesReference
+func TestComputeFixedResiduals64MatchesReference(t *testing.T) {
+	var st uint64 = 0x123456789ABCDEF0
+	next := func() int64 {
+		st = st*6364136223846793005 + 1442695040888963407
+		return int64(st) //nolint:gosec // intentional wraparound to span the int64 range
+	}
+	for _, length := range []int{4, 5, 6, 7, 8, 9, 16, 17, 31, 32, 33, 64, 100, 1023, 1024, 4096, 4097} {
+		src := make([]int64, length)
+		for i := range src {
+			src[i] = next()
+		}
+		for order := 0; order <= 4 && order < length; order++ {
+			want := make([]int64, length-order)
+			got := make([]int64, length-order)
+			computeFixedResiduals64Ref(want, src, order)
+			ComputeFixedResiduals64(got, src, order)
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("order=%d len=%d i=%d: got %d, want %d", order, length, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
+
 func TestFixedAbsSumsMatchesPerOrder(t *testing.T) {
 	x := make([]int32, 1024)
 	s := uint32(7)
