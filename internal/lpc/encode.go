@@ -7,28 +7,93 @@ import "github.com/tphakala/simd/i32"
 // prediction = sum(fixedCoeffs[order][j] * src[order+i-1-j]). It is the exact
 // inverse of RestoreFixed. Valid only for orders 0..4 and src bit depth <= 24,
 // where residuals stay within int32.
+// ComputeFixedResiduals fills res (len must be len(src)-order) with the order-N
+// fixed-predictor residuals of src: res[i] = src[order+i] - prediction, where
+// prediction = sum(fixedCoeffs[order][j] * src[order+i-1-j]). It is the exact
+// inverse of RestoreFixed. Valid only for orders 0..4 and src bit depth <= 24,
+// where residuals stay within int32.
+//
+// Each order is specialized with its constant coefficients so the compiler
+// strength-reduces the predictor to shifts and adds (no runtime multiply) and
+// drops the per-coefficient inner loop. Reslicing src to its exact window lets
+// the indexed loads prove in-range. The int64 predictor and int32 truncation
+// match the generic form exactly, so output is byte-identical.
 func ComputeFixedResiduals(res, src []int32, order int) {
-	coeffs := fixedCoeffs[order]
-	for i := range res {
-		n := order + i
-		var pred int64
-		for j, c := range coeffs {
-			pred += c * int64(src[n-1-j])
+	switch order {
+	case 0:
+		copy(res, src[:len(res)])
+	case 1:
+		s := src[:len(res)+1]
+		for i := range res {
+			res[i] = s[i+1] - s[i]
 		}
-		res[i] = src[n] - int32(pred)
+	case 2:
+		s := src[:len(res)+2]
+		for i := range res {
+			res[i] = s[i+2] - int32(2*int64(s[i+1])-int64(s[i]))
+		}
+	case 3:
+		s := src[:len(res)+3]
+		for i := range res {
+			res[i] = s[i+3] - int32(3*int64(s[i+2])-3*int64(s[i+1])+int64(s[i]))
+		}
+	case 4:
+		s := src[:len(res)+4]
+		for i := range res {
+			res[i] = s[i+4] - int32(4*int64(s[i+3])-6*int64(s[i+2])+4*int64(s[i+1])-int64(s[i]))
+		}
+	default:
+		coeffs := fixedCoeffs[order]
+		for i := range res {
+			n := order + i
+			var pred int64
+			for j, c := range coeffs {
+				pred += c * int64(src[n-1-j])
+			}
+			res[i] = src[n] - int32(pred)
+		}
 	}
 }
 
 // ComputeFixedResiduals64 is the int64 analogue of ComputeFixedResiduals.
+// ComputeFixedResiduals64 is the int64 analogue of ComputeFixedResiduals, used
+// for sample depths above 24 bits. It is specialized per order on the same
+// rationale: constant coefficients let the compiler strength-reduce the predictor
+// and drop the inner loop, byte-identical to the generic accumulate.
 func ComputeFixedResiduals64(res, src []int64, order int) {
-	coeffs := fixedCoeffs[order]
-	for i := range res {
-		n := order + i
-		var pred int64
-		for j, c := range coeffs {
-			pred += c * src[n-1-j]
+	switch order {
+	case 0:
+		copy(res, src[:len(res)])
+	case 1:
+		s := src[:len(res)+1]
+		for i := range res {
+			res[i] = s[i+1] - s[i]
 		}
-		res[i] = src[n] - pred
+	case 2:
+		s := src[:len(res)+2]
+		for i := range res {
+			res[i] = s[i+2] - (2*s[i+1] - s[i])
+		}
+	case 3:
+		s := src[:len(res)+3]
+		for i := range res {
+			res[i] = s[i+3] - (3*s[i+2] - 3*s[i+1] + s[i])
+		}
+	case 4:
+		s := src[:len(res)+4]
+		for i := range res {
+			res[i] = s[i+4] - (4*s[i+3] - 6*s[i+2] + 4*s[i+1] - s[i])
+		}
+	default:
+		coeffs := fixedCoeffs[order]
+		for i := range res {
+			n := order + i
+			var pred int64
+			for j, c := range coeffs {
+				pred += c * src[n-1-j]
+			}
+			res[i] = src[n] - pred
+		}
 	}
 }
 
