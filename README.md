@@ -66,7 +66,7 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
 - M6 completeness and v0.1.0: public-API and godoc review, provenance and license
   audit, and the full pre-release validation gate. This is the first tagged
   release: a feature-complete, pure-Go codec. (done)
-- v0.2.0 (next): SIMD integration. The encoder's Rice partition cost search
+- v0.2.0: SIMD integration. The encoder's Rice partition cost search
   (i32.RiceSums), fixed-predictor residuals and order selection (i32.Diff1-4), and
   quantized-LPC residual cost evaluation (i32.LPCResidualEncode) dispatch to
   github.com/tphakala/simd's AVX2/NEON kernels at runtime, with a pure-Go fallback.
@@ -74,6 +74,15 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
   both the SIMD and pure-Go paths), so output stays byte-identical. Level-5 16-bit
   stereo encode throughput improves roughly 2.7x (about 15.2 ms/op to 5.5 ms/op on
   the reference benchmark). (done)
+- Single-core throughput: a series of byte-identical encoder optimizations on top
+  of the SIMD integration. Estimate-driven predictor selection; a 64-bit bit-writer
+  word flush with combined Rice quotient/remainder; SIMD-accelerated LPC
+  autocorrelation, estimate-path primitives (ZigzagSum, FixedAbsSums, RiceSums), and
+  per-partition min/max (finestMaxU); a wider 64-bit PCM deinterleave and per-order
+  fixed-predictor specialization in pure Go; and a CRC-16 carry-less-multiply fold
+  (PCLMULQDQ on amd64, PMULL on arm64) that retires the slice-by-16 table loop, the
+  last sizeable compute-bound scalar hot path. Each step is verified byte-for-byte
+  against the prior output. (done)
 
 `SeekToSample` is sample-accurate and requires an io.Seeker; it returns
 `ErrSeekUnsupported` when the source is not seekable and `ErrInvalidSeek` on a
@@ -215,9 +224,10 @@ scripts/bench-encoders.sh my.wav   # your own WAV
 ```
 
 It requires GNU `time`; `flac`, `sox`, and `ffmpeg` are each optional and skipped
-if absent. On reference hardware (i7-1260P, level 5, single-threaded) the pure-Go
-encoder matches libFLAC's compression ratio while running several times slower;
-SIMD acceleration to close that gap is the v0.2.0 track.
+if absent. On reference hardware (i7-1260P, level 5, single-threaded) the encoder
+matches libFLAC's compression ratio. The SIMD integration and the byte-identical
+single-core throughput work above have substantially narrowed the speed gap; this
+script is the basis for tracking it.
 
 ## License
 
