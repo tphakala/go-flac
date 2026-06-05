@@ -91,15 +91,14 @@ func TestFixedAbsSumsMatchesPerOrderEdgeCases(t *testing.T) {
 				for _, v := range x {
 					want += absU64(int64(v))
 				}
-			} else {
+			} else if order < len(x) {
 				res := make([]int32, len(x))
-				if order < len(x) {
-					FixedResidualsDiff(res, x, order)
-				}
-				for _, v := range res[min(order, len(x)):] {
+				FixedResidualsDiff(res, x, order)
+				for _, v := range res[order:] {
 					want += absU64(int64(v))
 				}
 			}
+			// order >= len(x): no residuals are coded, so want stays 0.
 			if got[order] != want {
 				t.Fatalf("n=%d order %d: FixedAbsSums=%d want %d", n, order, got[order], want)
 			}
