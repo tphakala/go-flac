@@ -4,6 +4,7 @@ import (
 	"math/bits"
 
 	"github.com/tphakala/go-flac/internal/bitio"
+	"github.com/tphakala/simd/i32"
 )
 
 const (
@@ -511,16 +512,11 @@ func finestMaxU(sc *Scratch, res []int32, blockSize, predOrder, pmax int) uint64
 		}
 		var mu uint64
 		if n > 0 {
-			part := res[idx : idx+n]
-			lo, hi := part[0], part[0]
-			for _, r := range part {
-				if r < lo {
-					lo = r
-				}
-				if r > hi {
-					hi = r
-				}
-			}
+			// i32.MinMax returns the exact signed (min, max) of the partition via
+			// SIMD min/max (with a scalar fallback for short partitions), so the
+			// max zigzag is reached at one of the two extremes, byte-identical to
+			// the old inline scalar lo/hi scan.
+			lo, hi := i32.MinMax(res[idx : idx+n])
 			mu = max(zigzag(lo), zigzag(hi))
 		}
 		sc.maxU[p] = mu
@@ -535,16 +531,7 @@ func finestMaxU(sc *Scratch, res []int32, blockSize, predOrder, pmax int) uint64
 	// The tail affects only the returned global (hence ncols), never the stored
 	// per-partition maxU, matching the old whole-block scan exactly.
 	if idx < len(res) {
-		tail := res[idx:]
-		lo, hi := tail[0], tail[0]
-		for _, r := range tail {
-			if r < lo {
-				lo = r
-			}
-			if r > hi {
-				hi = r
-			}
-		}
+		lo, hi := i32.MinMax(res[idx:])
 		if u := max(zigzag(lo), zigzag(hi)); u > global {
 			global = u
 		}
