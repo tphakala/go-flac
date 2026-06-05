@@ -1,6 +1,10 @@
 package rice
 
-import "math/bits"
+import (
+	"math/bits"
+
+	"github.com/tphakala/simd/i32"
+)
 
 // ZigzagSum64 returns the sum over j of zigzag64(res[j]); the int64 analogue of
 // ZigzagSum, used to rank wide-path (25-32 bps) candidates. Allocation-free.
@@ -14,14 +18,12 @@ func ZigzagSum64(res []int64) uint64 {
 
 // ZigzagSum returns the sum over j of zigzag(res[j]). zigzag maps signed
 // residuals to the unsigned magnitudes the Rice coder counts (zigzag(r) is
-// approximately 2|r|). Pure-Go reference; a SIMD kernel replaces the body in a
-// later task. Allocation-free.
+// approximately 2|r|). It delegates to the SIMD-accelerated i32.ZigzagSum (AVX2
+// on amd64, NEON on arm64, pure-Go fallback otherwise), which is bit-identical to
+// the scalar Σ zigzag(res) reference, so the candidate ranking it feeds is
+// unchanged whether or not SIMD is active. Allocation-free.
 func ZigzagSum(res []int32) uint64 {
-	var s uint64
-	for _, r := range res {
-		s += zigzag(r)
-	}
-	return s
+	return i32.ZigzagSum(res)
 }
 
 // EstimateRiceBits approximates the Rice-coded size, in bits, of n residuals

@@ -1,5 +1,7 @@
 package lpc
 
+import "github.com/tphakala/simd/i32"
+
 // ComputeFixedResiduals fills res (len must be len(src)-order) with the order-N
 // fixed-predictor residuals of src: res[i] = src[order+i] - prediction, where
 // prediction = sum(fixedCoeffs[order][j] * src[order+i-1-j]). It is the exact
@@ -68,37 +70,13 @@ func ComputeLPCResiduals64(res, src []int64, qcoeff []int32, shift, order int) {
 // pass. The first `order` samples are warmup (excluded from coding) and excluded
 // from the sum, matching FixedResidualsDiff(res, src, order) summed over
 // res[order:]. This is the analysis input to EstimateRiceBits for fixed-order
-// selection. The body is replaced by a SIMD kernel in a later task; this scalar
-// form is the reference. Allocation-free (writes through the caller's array).
+// selection. It delegates to the SIMD-accelerated i32.FixedAbsSums (AVX2 on
+// amd64, NEON on arm64, pure-Go fallback otherwise), which is bit-identical to
+// the scalar int64 difference-cascade reference, so fixed-order selection is
+// unchanged whether or not SIMD is active. Allocation-free (writes through the
+// caller's array). The int64 wide-path analogue FixedAbsSums64 stays scalar.
 func FixedAbsSums(src []int32, sums *[5]uint64) {
-	// Accumulate into a local array and store once at the end. Writing through
-	// *sums every iteration would force the accumulators to memory (the compiler
-	// cannot prove sums does not alias src), so locals keep them in registers
-	// across the hot loop.
-	var s [5]uint64
-	var p1, p2, p3, p4 int64 // state: p1=prev e0, p2=prev e1, p3=prev e2, p4=prev e3
-	for i, v := range src {
-		e0 := int64(v)
-		e1 := e0 - p1
-		e2 := e1 - p2
-		e3 := e2 - p3
-		e4 := e3 - p4
-		s[0] += absU64(e0)
-		if i >= 1 {
-			s[1] += absU64(e1)
-		}
-		if i >= 2 {
-			s[2] += absU64(e2)
-		}
-		if i >= 3 {
-			s[3] += absU64(e3)
-		}
-		if i >= 4 {
-			s[4] += absU64(e4)
-		}
-		p1, p2, p3, p4 = e0, e1, e2, e3
-	}
-	*sums = s
+	i32.FixedAbsSums(src, sums)
 }
 
 // FixedAbsSums64 is the int64 analogue of FixedAbsSums: it fills sums[order] with

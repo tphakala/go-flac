@@ -139,7 +139,12 @@ func TestBuildFinestTablesInt32_SIMDParity(t *testing.T) {
 func TestPartitionSumsParity(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
 	lengths := []int{0, 1, 7, 8, 9, 16, 31, 256, 4096}
-	widths := []int{1, 3, 14, 15, 16, 31}
+	// Widths span both sides of the SIMD fast-path range: <=15 (4-bit method),
+	// 16..31 (5-bit method, the widened kernel), and >31 (i32.RiceSums' pure-Go
+	// fallback, which partitionSums now relies on entirely since it no longer has
+	// its own scalar tail). go-flac never requests >31 in practice, but the seam
+	// must stay correct there.
+	widths := []int{1, 3, 14, 15, 16, 31, 32, 40}
 	for _, n := range lengths {
 		res := make([]int32, n)
 		for i := range res {

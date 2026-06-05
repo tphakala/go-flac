@@ -37,6 +37,37 @@ func TestZigzagSumMatchesScalar(t *testing.T) {
 	}
 }
 
+func TestZigzagSumMatchesScalarEdgeCases(t *testing.T) {
+	// Covers the cases that distinguish a SIMD kernel from the scalar loop: the
+	// int32 extremes (zigzag(MinInt32) == 0xFFFFFFFF, the widest single term) and
+	// a spread of lengths around the vector width so the kernel's tail handling is
+	// exercised. The scalar zigzag is the reference on every length. Run under
+	// GODEBUG=cpu.avx2=off as well to assert SIMD/pure-Go parity.
+	const minI32 = int32(-1 << 31)
+	const maxI32 = int32(1<<31 - 1)
+	lengths := []int{0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 127}
+	x := uint32(0x9e3779b9)
+	for _, n := range lengths {
+		res := make([]int32, n)
+		for i := range res {
+			x = x*1103515245 + 12345
+			res[i] = int32(x)
+		}
+		// Force the extremes into any length >= 2 so the widest terms are summed.
+		if n >= 2 {
+			res[0] = minI32
+			res[n-1] = maxI32
+		}
+		var want uint64
+		for _, r := range res {
+			want += zigzag(r)
+		}
+		if got := ZigzagSum(res); got != want {
+			t.Fatalf("n=%d: ZigzagSum=%d want %d", n, got, want)
+		}
+	}
+}
+
 func TestEstimateRiceBitsZeroAlloc(t *testing.T) {
 	res := make([]int32, 4096)
 	if a := testing.AllocsPerRun(100, func() {
