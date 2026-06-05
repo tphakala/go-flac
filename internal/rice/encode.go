@@ -221,10 +221,22 @@ func WritePlanned(bw *bitio.Writer, res []int32, predOrder, blockSize int, plans
 		} else {
 			k := uint(pl.param)
 			bw.WriteBits(uint64(pl.param), uint(paramBits))
+			mask := (uint64(1) << k) - 1
+			stop := uint64(1) << k
+			// Combine the unary quotient's stop bit and the k remainder bits into a
+			// single WriteBits when the total width q+1+k fits (<= 57). k <= maxParam5
+			// (30) keeps maxQ non-negative; rare large-quotient outliers fall back to
+			// the split unary+remainder form. Byte-identical to the split path.
+			maxQ := uint64(56 - k)
 			for i := range n {
 				u := zigzag(res[idx+i])
-				bw.WriteUnary(u >> k)
-				bw.WriteBits(u&((uint64(1)<<k)-1), k)
+				q := u >> k
+				if q <= maxQ {
+					bw.WriteBits(stop|(u&mask), uint(q)+1+k)
+				} else {
+					bw.WriteUnary(q)
+					bw.WriteBits(u&mask, k)
+				}
 			}
 		}
 		idx += n
@@ -284,10 +296,22 @@ func WritePlanned64(bw *bitio.Writer, res []int64, predOrder, blockSize int, pla
 		} else {
 			k := uint(pl.param)
 			bw.WriteBits(uint64(pl.param), uint(paramBits))
+			mask := (uint64(1) << k) - 1
+			stop := uint64(1) << k
+			// Combine the unary quotient's stop bit and the k remainder bits into a
+			// single WriteBits when the total width q+1+k fits (<= 57). k <= maxParam5
+			// (30) keeps maxQ non-negative; rare large-quotient outliers fall back to
+			// the split unary+remainder form. Byte-identical to the split path.
+			maxQ := uint64(56 - k)
 			for i := range n {
 				u := zigzag64(res[idx+i])
-				bw.WriteUnary(u >> k)
-				bw.WriteBits(u&((uint64(1)<<k)-1), k)
+				q := u >> k
+				if q <= maxQ {
+					bw.WriteBits(stop|(u&mask), uint(q)+1+k)
+				} else {
+					bw.WriteUnary(q)
+					bw.WriteBits(u&mask, k)
+				}
 			}
 		}
 		idx += n
