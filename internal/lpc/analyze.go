@@ -3,7 +3,11 @@
 // is float64; the integer encode/decode contract lives in lpc.go and encode.go.
 package lpc
 
-import "math"
+import (
+	"math"
+
+	"github.com/tphakala/simd/f64"
+)
 
 // maxQLPShift is the largest quantization shift the FLAC bitstream allows in
 // the 5-bit non-negative shift field (the decoder rejects negative shift).
@@ -86,6 +90,10 @@ func TukeyWindow(n int, alpha float64) []float64 {
 // autocorrelateInto writes the autocorrelation of x for lags 0..maxLag inclusive
 // into autoc (which must have len >= maxLag+1). autoc[lag] = sum_{i=lag}^{N-1}
 // x[i]*x[i-lag]. The arithmetic is identical to the allocating autocorrelate.
+//
+// AnalyzeLPC drives the hot path through f64.Autocorrelate (SIMD-accelerated);
+// this scalar version is retained as the bit-exact reference that the SIMD
+// kernels reproduce and as the oracle for the parity tests.
 func autocorrelateInto(autoc, x []float64, maxLag int) {
 	n := len(x)
 	for lag := 0; lag <= maxLag; lag++ {
@@ -295,7 +303,10 @@ func AnalyzeLPC[T Sample](samples []T, window []float64, maxOrder, precision, ef
 	}
 
 	autoc := sc.autoc[:mo+1]
-	autocorrelateInto(autoc, windowed, mo)
+	// SIMD-accelerated autocorrelation. The kernel vectorizes across lags and is
+	// byte-identical to autocorrelateInto (the scalar reference) on every build,
+	// so the quantized LPC coefficients and the encoded stream are unchanged.
+	f64.Autocorrelate(autoc, windowed, mo)
 	if autoc[0] == 0 {
 		return 0, 0, 0, false
 	}
