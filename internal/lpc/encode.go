@@ -7,11 +7,6 @@ import "github.com/tphakala/simd/i32"
 // prediction = sum(fixedCoeffs[order][j] * src[order+i-1-j]). It is the exact
 // inverse of RestoreFixed. Valid only for orders 0..4 and src bit depth <= 24,
 // where residuals stay within int32.
-// ComputeFixedResiduals fills res (len must be len(src)-order) with the order-N
-// fixed-predictor residuals of src: res[i] = src[order+i] - prediction, where
-// prediction = sum(fixedCoeffs[order][j] * src[order+i-1-j]). It is the exact
-// inverse of RestoreFixed. Valid only for orders 0..4 and src bit depth <= 24,
-// where residuals stay within int32.
 //
 // Each order is specialized with its constant coefficients so the compiler
 // strength-reduces the predictor to shifts and adds (no runtime multiply) and
@@ -55,7 +50,6 @@ func ComputeFixedResiduals(res, src []int32, order int) {
 	}
 }
 
-// ComputeFixedResiduals64 is the int64 analogue of ComputeFixedResiduals.
 // ComputeFixedResiduals64 is the int64 analogue of ComputeFixedResiduals, used
 // for sample depths above 24 bits. It is specialized per order on the same
 // rationale: constant coefficients let the compiler strength-reduce the predictor
