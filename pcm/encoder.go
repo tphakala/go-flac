@@ -164,7 +164,7 @@ func (e *Encoder) Write(p []byte) (int, error) {
 		}
 		e.carry = append(e.carry[:0], e.leftover...)
 		e.carry = append(e.carry, p[:need]...) // e.carry is now exactly one block
-		if err := e.emitBlock(e.carry, encoderBlockSize); err != nil {
+		if err := e.emitBlock(e.carry, encoderBlockSize, false); err != nil {
 			return 0, err // boundary block failed: no bytes of p durably consumed
 		}
 		// Bound the retained carry capacity: a future Write refactor should not be
@@ -183,7 +183,7 @@ func (e *Encoder) Write(p []byte) (int, error) {
 	// 2. Emit whole blocks straight from p (no copy).
 	off := 0
 	for len(p)-off >= blockBytes {
-		if err := e.emitBlock(p[off:off+blockBytes], encoderBlockSize); err != nil {
+		if err := e.emitBlock(p[off:off+blockBytes], encoderBlockSize, false); err != nil {
 			return written + off, err
 		}
 		off += blockBytes
@@ -199,7 +199,7 @@ func (e *Encoder) Write(p []byte) (int, error) {
 // STREAMINFO MD5. When seek-table recording is active, a seek point is appended
 // for the first frame (frameOffset == 0) and for each frame whose first sample
 // meets or crosses the next boundary.
-func (e *Encoder) emitBlock(chunk []byte, n int) error {
+func (e *Encoder) emitBlock(chunk []byte, n int, final bool) error {
 	for c := range e.ch {
 		e.ch[c] = e.ch[c][:n]
 	}
@@ -242,8 +242,17 @@ func (e *Encoder) emitBlock(chunk []byte, n int) error {
 	} else {
 		e.minFrame = min(e.minFrame, sz)
 		e.maxFrame = max(e.maxFrame, sz)
-		e.minBlock = min(e.minBlock, n)
-		e.maxBlock = max(e.maxBlock, n)
+		// The STREAMINFO minimum block size excludes the last block, which may be
+		// short. Only Close emits a short block (every Write block is the nominal
+		// encoderBlockSize) and it is always the final one, so do not fold a final
+		// block into the sample block-size bounds. A stream whose sole block is
+		// short is initialized by the !e.wrote branch above (min==max==its size).
+		// Keeping minBlock==maxBlock makes decoders treat the output as a seekable
+		// fixed-blocksize stream instead of a variable-blocksize one.
+		if !final {
+			e.minBlock = min(e.minBlock, n)
+			e.maxBlock = max(e.maxBlock, n)
+		}
 	}
 	// Restore full-length buffers for the next block.
 	for c := range e.ch {
@@ -265,7 +274,7 @@ func (e *Encoder) Close() error {
 			return fmt.Errorf("go-flac/pcm: Close: %d trailing bytes are not a whole sample", len(e.leftover))
 		}
 		n := len(e.leftover) / e.frameLen
-		if err := e.emitBlock(e.leftover, n); err != nil {
+		if err := e.emitBlock(e.leftover, n, true); err != nil {
 			return err
 		}
 	}
