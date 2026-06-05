@@ -51,10 +51,15 @@ type Scratch struct {
 }
 
 func (s *Scratch) ensure(parts, ncols int) {
-	if cap(s.sums) < parts*ncols {
-		s.sums = make([]uint64, parts*ncols)
-	}
-	s.sums = s.sums[:parts*ncols]
+	s.ensurePlan(parts)
+	s.ensureSums(parts, ncols)
+}
+
+// ensurePlan sizes the per-partition plan scratch (maxU, cur, plans), none of
+// which depend on ncols. The int32 planner sizes these before it knows ncols so
+// it can fill maxU in a first pass and derive ncols from the reduced global
+// maximum, dropping the former separate whole-block min/max scan.
+func (s *Scratch) ensurePlan(parts int) {
 	if cap(s.maxU) < parts {
 		s.maxU = make([]uint64, parts)
 	}
@@ -66,6 +71,14 @@ func (s *Scratch) ensure(parts, ncols int) {
 	if cap(s.plans) < parts {
 		s.plans = make([]PartPlan, parts)
 	}
+}
+
+// ensureSums sizes the finest-order sums table (parts*ncols wide).
+func (s *Scratch) ensureSums(parts, ncols int) {
+	if cap(s.sums) < parts*ncols {
+		s.sums = make([]uint64, parts*ncols)
+	}
+	s.sums = s.sums[:parts*ncols]
 }
 
 // feasiblePmax returns the largest feasible partition order for a block of the
@@ -346,37 +359,29 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 		return riceFallbackPlan(sc, zz)
 	}
 
+	P := 1 << pmax
+	sc.ensurePlan(P)
+	// finestMaxU fills sc.maxU[p] (the per-partition extreme the escape code needs)
+	// and returns the global max zigzag over res. That global value is exactly what
+	// a separate whole-block min/max scan produced: the finest partitions tile
+	// res[0:blockSize-predOrder] and zigzag is monotonic in magnitude, so reducing
+	// the per-partition maxima yields the same value, removing a full O(N) scan.
+	//
 	// Column count: only k in [est-1, est+2] is ever read, and est <= bits.Len64(maxU)
 	// over the whole block, so ncols = min(maxParam5, globalRaw+2)+1 covers every
-	// query while keeping the finest pass cheap for quiet signals. zigzag is V-shaped
-	// (minimized at 0, monotonic in magnitude on each side), so the largest zigzag in
-	// res is reached at the most-negative or most-positive residual; finding those two
-	// extremes and zigzagging only them avoids a zigzag call per residual.
-	var globalMaxU uint64
-	if len(res) > 0 {
-		lo, hi := res[0], res[0]
-		for _, r := range res {
-			if r < lo {
-				lo = r
-			}
-			if r > hi {
-				hi = r
-			}
-		}
-		globalMaxU = max(zigzag(lo), zigzag(hi))
-	}
+	// query while keeping the finest sums pass cheap for quiet signals.
+	globalMaxU := finestMaxU(sc, res, blockSize, predOrder, pmax)
 	kHi := bits.Len64(globalMaxU) + 2
 	if kHi > maxParam5 {
 		kHi = maxParam5
 	}
 	ncols := kHi + 1
 
-	P := 1 << pmax
-	sc.ensure(P, ncols)
-	// No pre-zeroing: buildFinestTablesInt32 fully overwrites every sums row via
+	sc.ensureSums(P, ncols)
+	// No pre-zeroing: buildFinestSumsInt32 fully overwrites every sums row via
 	// partitionSums (which writes all ncols columns, even for empty partitions),
 	// unlike the int64 path below which accumulates with += and must be cleared.
-	buildFinestTablesInt32(sc, res, blockSize, predOrder, pmax, ncols)
+	buildFinestSumsInt32(sc, res, blockSize, predOrder, pmax, ncols)
 
 	return planFromTables(sc, blockSize, predOrder, pmax, kHi, ncols)
 }
@@ -484,38 +489,29 @@ func riceFallbackPlan(sc *Scratch, zz []uint64) (bestPO int, bestPlans []PartPla
 	return 0, sc.plans, paramBits, 2 + 4 + paramBits + pl.payload
 }
 
-// buildFinestTablesInt32 computes, for the finest feasible partition order pmax,
-// the per-partition sums table (sc.sums[p*ncols+k] = sum of u>>k over the
-// partition, for k in 0..kHi) and the per-partition max zigzag (sc.maxU), reading
-// residuals from res and zigzagging on the fly. sc.sums must be zeroed by the
-// caller (it accumulates with +=); sc.maxU entries are fully assigned per
-// partition and need no pre-zeroing. These tables are merged upward by mergeUpward
-// as planFromTables descends through coarser orders.
-func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, ncols int) {
+// finestMaxU fills sc.maxU[p] with each finest partition's max zigzag and returns
+// the global max zigzag over res. The per-partition maxU is the escape-code cost
+// input planFromTables needs; reducing those maxima (and folding any residual tail
+// beyond the partitioned region) reproduces exactly what PlanResidualInt32's former
+// separate whole-block min/max scan computed for ncols, so no second pass is needed.
+//
+// zigzag is V-shaped (minimized at 0, monotonic in magnitude on each side), so a
+// partition's largest zigzag is reached at its most-negative or most-positive
+// residual; finding those two extremes and zigzagging only them avoids a zigzag per
+// residual. Byte-identical to max over all zigzags.
+func finestMaxU(sc *Scratch, res []int32, blockSize, predOrder, pmax int) uint64 {
 	P := 1 << pmax
 	partLen := blockSize >> pmax
 	idx := 0
+	var global uint64
 	for p := range P {
 		n := partLen
 		if p == 0 {
 			n -= predOrder
 		}
-		part := res[idx : idx+n]
-		// row holds this partition's sums columns (ncols == kHi+1). partitionSums
-		// fills row[k] = Σ_j zigzag(part[j])>>k via SIMD, fully overwriting it. This
-		// is byte-identical to the scalar sums[base+k] += u>>k accumulation the
-		// per-order rescan used, so the merge-upward search and the chosen plans are
-		// unchanged. row is fully written even when n == 0 (empty partition -> zeros),
-		// so the int32 path needs no caller-side pre-zeroing (the int64 builder still
-		// accumulates with += and is cleared by PlanResidualInt64).
-		row := sc.sums[p*ncols : p*ncols+ncols]
-		partitionSums(row, part)
-		// maxU is the largest zigzag in the partition. zigzag is V-shaped (monotonic
-		// in magnitude on each side), so the maximum is reached at the most-negative
-		// or most-positive residual; finding those two extremes and zigzagging only
-		// them avoids a zigzag per residual. Byte-identical to max over all zigzags.
 		var mu uint64
 		if n > 0 {
+			part := res[idx : idx+n]
 			lo, hi := part[0], part[0]
 			for _, r := range part {
 				if r < lo {
@@ -528,12 +524,59 @@ func buildFinestTablesInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax
 			mu = max(zigzag(lo), zigzag(hi))
 		}
 		sc.maxU[p] = mu
+		if mu > global {
+			global = mu
+		}
+		idx += n
+	}
+	// Fold any residual tail beyond the partitioned region (len(res) >
+	// blockSize-predOrder). Empty for every production caller, which passes res of
+	// exactly blockSize-predOrder; present only for synthetic over-length inputs.
+	// The tail affects only the returned global (hence ncols), never the stored
+	// per-partition maxU, matching the old whole-block scan exactly.
+	if idx < len(res) {
+		tail := res[idx:]
+		lo, hi := tail[0], tail[0]
+		for _, r := range tail {
+			if r < lo {
+				lo = r
+			}
+			if r > hi {
+				hi = r
+			}
+		}
+		if u := max(zigzag(lo), zigzag(hi)); u > global {
+			global = u
+		}
+	}
+	return global
+}
+
+// buildFinestSumsInt32 fills sc.sums[p*ncols : p*ncols+ncols] with row[k] =
+// Σ_j zigzag(part[j])>>k for each finest partition via SIMD partitionSums, fully
+// overwriting every row (empty partitions become zeros), so no caller-side
+// pre-zeroing is needed. The per-partition maxU is computed separately by
+// finestMaxU. Byte-identical to the scalar sums[base+k] += u>>k accumulation.
+func buildFinestSumsInt32(sc *Scratch, res []int32, blockSize, predOrder, pmax, ncols int) {
+	P := 1 << pmax
+	partLen := blockSize >> pmax
+	idx := 0
+	for p := range P {
+		n := partLen
+		if p == 0 {
+			n -= predOrder
+		}
+		row := sc.sums[p*ncols : p*ncols+ncols]
+		partitionSums(row, res[idx:idx+n])
 		idx += n
 	}
 }
 
-// buildFinestTablesInt64 is the wide-path analogue of buildFinestTablesInt32,
-// reading int64 residuals and zigzagging with zigzag64.
+// buildFinestTablesInt64 is the wide-path analogue of the int32 finest-table pass,
+// reading int64 residuals and zigzagging with zigzag64. The int32 path splits sums
+// (buildFinestSumsInt32) and maxU (finestMaxU) into two passes so its global max can
+// drop a separate scan; the rarely-used wide path keeps both in one scalar loop,
+// computing maxU inline as it accumulates sums.
 func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax, ncols int) {
 	P := 1 << pmax
 	partLen := blockSize >> pmax
@@ -543,7 +586,7 @@ func buildFinestTablesInt64(sc *Scratch, res []int64, blockSize, predOrder, pmax
 		if p == 0 {
 			n -= predOrder
 		}
-		// See buildFinestTablesInt32: row slice + & 63 mask drop the bounds check and
+		// See buildFinestSumsInt32: row slice + & 63 mask drop the bounds check and
 		// oversized-shift guard from this hot loop. Byte-identical.
 		row := sc.sums[p*ncols : p*ncols+ncols]
 		var mu uint64
