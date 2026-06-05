@@ -53,11 +53,12 @@ func TestStreamInfoFixedBlockSizeExcludesShortFinalBlock(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			minB, maxB := streamInfoBlockSizes(t, c.nSamples)
-			if minB != maxB {
-				t.Errorf("MinBlock=%d MaxBlock=%d: fixed-blocksize stream must report MinBlock==MaxBlock (short final block leaked into the minimum)", minB, maxB)
-			}
+			// wantMin == wantMax for every case, so this one assertion also enforces
+			// the MinBlock == MaxBlock invariant: a fixed-blocksize stream that
+			// reports unequal bounds (short final block leaked into the minimum) is
+			// treated as variable-blocksize and rejects go-flac's frame numbering.
 			if minB != c.wantMin || maxB != c.wantMax {
-				t.Errorf("MinBlock=%d MaxBlock=%d, want %d/%d", minB, maxB, c.wantMin, c.wantMax)
+				t.Errorf("MinBlock=%d MaxBlock=%d, want %d/%d (fixed-blocksize stream must report equal min/max, excluding the short final block)", minB, maxB, c.wantMin, c.wantMax)
 			}
 		})
 	}
