@@ -3,7 +3,7 @@ package flac
 import "errors"
 
 // Version is the current library version. go-flac follows semantic versioning.
-const Version = "0.1.0"
+const Version = "0.3.0"
 
 // Sentinel errors returned by the decoder and the pcm streaming layer.
 // Callers can test for them with errors.Is.
