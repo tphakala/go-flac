@@ -4,7 +4,7 @@ import (
 	"math/bits"
 
 	"github.com/tphakala/go-flac/internal/bitio"
-	"github.com/tphakala/simd/i32"
+	"github.com/tphakala/go-flac/internal/i32"
 )
 
 const (
