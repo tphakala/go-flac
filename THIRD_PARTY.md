@@ -1,8 +1,10 @@
 # Third-party provenance
 
-go-flac is an independent, clean-room reimplementation. No third-party source
-code is copied into this repository; everything here is original work licensed
-under the MIT License (see LICENSE).
+go-flac is an independent, clean-room reimplementation of the FLAC codec. The
+codec logic here is original work licensed under the MIT License (see LICENSE).
+The one block of code with external provenance is the int32 SIMD kernel package
+under internal/i32, vendored from the author's own MIT-licensed
+github.com/tphakala/simd project; see the SIMD section below.
 
 The following projects were used only as algorithm references or design
 inspiration, as noted. They are credited here in gratitude; none of their code
@@ -36,12 +38,16 @@ not a copy.
 
 ## SIMD
 
-- github.com/tphakala/simd (MIT): this project's own SIMD library, consumed as a
-  normal Go module dependency. The encoder's Rice partition cost search
-  (i32.RiceSums), fixed-predictor residuals (i32.Diff1-4), and quantized-LPC
-  residual cost evaluation (i32.LPCResidualEncode) dispatch to its AVX2 (amd64) /
-  NEON (arm64) kernels at runtime, with a pure-Go fallback on other CPUs and short
-  inputs. Every kernel is bit-identical to the scalar path, so the encoded stream
-  is byte-for-byte the same with or without SIMD; the rice/lpc parity tests assert
-  this on both the SIMD and pure-Go paths. Its only transitive dependency is
-  golang.org/x/sys (CPU feature detection).
+- github.com/tphakala/simd (MIT, same author): the int32 SIMD kernels that back
+  the encoder's hot paths (Rice partition cost search, fixed-predictor residuals,
+  quantized-LPC residual evaluation, stereo decorrelation) were developed in this
+  sibling project and are vendored verbatim into internal/i32, so the codec owns
+  its integer hot path end-to-end. They dispatch to AVX2 (amd64) / NEON (arm64)
+  kernels at runtime with a pure-Go fallback on other CPUs and short inputs; every
+  kernel is bit-identical to the scalar path, so the encoded stream is byte-for-byte
+  the same with or without SIMD (the rice/lpc parity tests assert this on both the
+  SIMD and pure-Go paths).
+- github.com/tphakala/simd also remains a normal module dependency for the parts
+  that did not move in-tree: simd/cpu (CPU feature detection, used by the vendored
+  kernels' dispatch), simd/f64 (LPC autocorrelation), and simd/crc (FLAC CRC-16).
+  Its only transitive dependency is golang.org/x/sys.

@@ -1,6 +1,6 @@
 package lpc
 
-import "github.com/tphakala/simd/i32"
+import "github.com/tphakala/go-flac/internal/i32"
 
 // FixedResidualsDiff writes the FLAC fixed-predictor output of order `order` for
 // src into dst in subframe layout: dst[0:order] receives the warmup samples

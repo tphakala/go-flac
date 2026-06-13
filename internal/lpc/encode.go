@@ -1,6 +1,6 @@
 package lpc
 
-import "github.com/tphakala/simd/i32"
+import "github.com/tphakala/go-flac/internal/i32"
 
 // ComputeFixedResiduals fills res (len must be len(src)-order) with the order-N
 // fixed-predictor residuals of src: res[i] = src[order+i] - prediction, where

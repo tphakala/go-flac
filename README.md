@@ -12,12 +12,13 @@
 
 Native Go FLAC encoder and decoder. No CGO and no external binaries, with a
 simple high-level PCM streaming API. The encoder hot paths are SIMD-accelerated
-(via [github.com/tphakala/simd](https://github.com/tphakala/simd)) with a pure-Go
-fallback, so the library still builds and runs on every Go target; the SIMD
-kernels are bit-identical to the scalar path, so encoded output is byte-for-byte
-the same with or without SIMD. SIMD adds one direct module dependency,
-github.com/tphakala/simd, plus its transitive golang.org/x/sys (CPU feature
-detection).
+(AVX2 on amd64, NEON on arm64) with a pure-Go fallback, so the library still
+builds and runs on every Go target; the SIMD kernels are bit-identical to the
+scalar path, so encoded output is byte-for-byte the same with or without SIMD.
+The integer kernels live in-tree under internal/i32; the
+[github.com/tphakala/simd](https://github.com/tphakala/simd) module supplies CPU
+feature detection, LPC autocorrelation, and CRC-16, and brings one transitive
+dependency, golang.org/x/sys.
 
 ## Install
 

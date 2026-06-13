@@ -3,7 +3,7 @@ package rice
 import (
 	"math/bits"
 
-	"github.com/tphakala/simd/i32"
+	"github.com/tphakala/go-flac/internal/i32"
 )
 
 // ZigzagSum64 returns the sum over j of zigzag64(res[j]); the int64 analogue of

@@ -1,6 +1,6 @@
 package rice
 
-import "github.com/tphakala/simd/i32"
+import "github.com/tphakala/go-flac/internal/i32"
 
 // partitionSums fills sums[k] with the per-Rice-parameter unary-bit total
 //
