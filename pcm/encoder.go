@@ -189,25 +189,25 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config) error {
 		e.nextBoundary = int64(e.seekInterval)
 		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
 		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
-			return err
+			return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
 		}
 		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
 		if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, len(stBody))); err != nil {
-			return err
+			return fmt.Errorf("go-flac/pcm: %s: write SEEKTABLE header: %w", op, err)
 		}
 		// SEEKTABLE body offset = "fLaC" + STREAMINFO header (StreamInfoBodyOffset) +
 		// STREAMINFO body + SEEKTABLE header (4).
 		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + 4)
 		if _, err := w.Write(stBody); err != nil {
-			return err
+			return fmt.Errorf("go-flac/pcm: %s: write SEEKTABLE body: %w", op, err)
 		}
 		if _, err := w.Write(meta.EncodeBlockHeader(true, meta.TypePadding, 0)); err != nil { // last=1
-			return err
+			return fmt.Errorf("go-flac/pcm: %s: write PADDING header: %w", op, err)
 		}
 	} else {
 		body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders, last=1
 		if err := meta.WriteStreamHeader(w, body); err != nil {
-			return err
+			return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
 		}
 	}
 	return nil
