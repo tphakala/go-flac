@@ -2,7 +2,6 @@ package pcm
 
 import (
 	"crypto/md5"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -62,40 +61,113 @@ var _ io.WriteCloser = (*Encoder)(nil)
 // the stream marker and a placeholder STREAMINFO immediately. Supported bit depths
 // are 4..32; other depths are rejected.
 func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
+	e := &Encoder{}
+	if err := e.init("NewEncoder", w, cfg); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Reset rebinds the encoder to a new sink w and reconfigures it with cfg so a
+// single Encoder can encode many independent streams without re-allocating its
+// large internal buffers between them. It re-validates cfg exactly like
+// NewEncoder, discards any input buffered from a previous (unflushed) stream,
+// resets all per-stream state (MD5, frame/sample counters, min/max sizes, seek
+// table), and re-emits the stream marker plus placeholder STREAMINFO (and the
+// SEEKTABLE placeholder, when requested) to w. The expensive per-channel block
+// buffers and frame workspace are retained and reused whenever the new config
+// keeps the same channel count and LPC order; they are reallocated only when that
+// shape changes. A same-shape Reset is therefore essentially allocation-free,
+// which is what lets callers pool encoders (for example via sync.Pool) across a
+// stream of short clips.
+//
+// After a successful Reset the encoder is ready for Write/Close as if freshly
+// constructed; on error it must not be used. Reset may be called on a closed
+// encoder, which is the usual pooling pattern (Reset, Write, Close, repeat).
+func (e *Encoder) Reset(w io.Writer, cfg Config) error {
+	return e.init("Reset", w, cfg)
+}
+
+// init (re)initializes e to write a fresh FLAC stream to w using cfg. It backs
+// both NewEncoder (on a zero-valued Encoder) and Reset (on a previously used one);
+// op names the calling API for error messages. The large buffers (ch, work) are
+// reused when the channel count and LPC order are unchanged from the previous
+// configuration, and the shape-independent bw and md5 are reused once allocated,
+// so a same-shape re-init allocates only the small fixed metadata header.
+func (e *Encoder) init(op string, w io.Writer, cfg Config) error {
 	if w == nil {
-		return nil, errors.New("go-flac/pcm: NewEncoder: nil writer")
+		return fmt.Errorf("go-flac/pcm: %s: nil writer", op)
 	}
 	if cfg.SampleRate <= 0 || cfg.SampleRate > 655350 || cfg.Channels < 1 || cfg.Channels > 8 {
 		// 655350 Hz is the FLAC maximum; the STREAMINFO sample-rate field is 20 bits,
 		// so a larger rate would be silently truncated.
-		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: invalid config %+v", cfg)
+		return fmt.Errorf("go-flac/pcm: %s: invalid config %+v", op, cfg)
 	}
 	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
-		return nil, fmt.Errorf("go-flac/pcm: NewEncoder: bit depth %d outside supported 4..32", cfg.BitDepth)
+		return fmt.Errorf("go-flac/pcm: %s: bit depth %d outside supported 4..32", op, cfg.BitDepth)
 	}
 
-	e := &Encoder{
-		w:       w,
-		cfg:     cfg,
-		si:      flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth},
-		params:  paramsForLevel(cfg.CompressionLevel),
-		bytesPS: (cfg.BitDepth + 7) / 8,
-		bw:      bitio.NewWriter(),
-		md5:     md5.New(),
-	}
-	e.frameLen = e.bytesPS * cfg.Channels
-	e.ch = make([][]int32, cfg.Channels)
-	for c := range e.ch {
-		e.ch[c] = make([]int32, encoderBlockSize)
-	}
-	e.work = frame.NewWorkspace(encoderBlockSize, cfg.Channels, e.params.MaxLPCOrder)
+	params := paramsForLevel(cfg.CompressionLevel)
+
+	// Decide buffer reuse against the PREVIOUS shape, still held in e.cfg/e.params,
+	// before those fields are overwritten below. On a fresh encoder e.ch/e.work are
+	// nil, so both guards fall through to allocation. Channel count and MaxLPCOrder
+	// fully determine the workspace shape: the block size is the constant
+	// encoderBlockSize, and paramsForLevel always leaves apodization at the Tukey(0.5)
+	// default, so the workspace's window cache stays valid across a same-shape reuse.
+	sameChannels := e.ch != nil && e.cfg.Channels == cfg.Channels
+	sameWorkspace := e.work != nil && e.cfg.Channels == cfg.Channels && e.params.MaxLPCOrder == params.MaxLPCOrder
+
+	e.w = w
+	e.ws = nil
 	if ws, ok := w.(io.WriteSeeker); ok {
 		e.ws = ws
 	}
+	e.cfg = cfg
+	e.si = flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth}
+	e.params = params
+	e.bytesPS = (cfg.BitDepth + 7) / 8
+	e.frameLen = e.bytesPS * cfg.Channels
+
+	if !sameChannels {
+		e.ch = make([][]int32, cfg.Channels)
+		for c := range e.ch {
+			e.ch[c] = make([]int32, encoderBlockSize)
+		}
+	}
+	if !sameWorkspace {
+		e.work = frame.NewWorkspace(encoderBlockSize, cfg.Channels, params.MaxLPCOrder)
+	}
+	if e.bw == nil {
+		e.bw = bitio.NewWriter()
+	} else {
+		e.bw.Reset()
+	}
+	if e.md5 == nil {
+		e.md5 = md5.New()
+	} else {
+		e.md5.Reset()
+	}
+
+	// Reset every per-stream field. carry/leftover/points keep their backing arrays
+	// (truncated to zero length) so a reused encoder stays allocation-free.
+	e.carry = e.carry[:0]
+	e.leftover = e.leftover[:0]
+	e.frameNum = 0
+	e.total = 0
+	e.wrote = false
+	e.minBlock, e.maxBlock, e.minFrame, e.maxFrame = 0, 0, 0, 0
+	e.audioBytes = 0
+	e.closed = false
+	e.seekInterval = 0
+	e.seekMaxPoints = 0
+	e.seekBodyOff = 0
+	e.nextBoundary = 0
+	e.points = e.points[:0]
 
 	if cfg.SeekTableInterval > 0 {
 		if e.ws == nil {
-			return nil, errors.New("go-flac/pcm: NewEncoder: SeekTableInterval requires an io.WriteSeeker sink")
+			return fmt.Errorf("go-flac/pcm: %s: SeekTableInterval requires an io.WriteSeeker sink", op)
 		}
 		e.seekInterval = cfg.SeekTableInterval
 		e.seekMaxPoints = cfg.SeekTableMaxPoints
@@ -108,34 +180,37 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 		if maxPoints := (1<<24 - 1) / meta.SeekPointBytes; e.seekMaxPoints > maxPoints {
 			e.seekMaxPoints = maxPoints
 		}
-		// Reserve the points slice up front (only when a seek table was requested) so a
-		// long encode does not repeatedly grow it; it never exceeds seekMaxPoints.
-		e.points = make([]meta.SeekPoint, 0, e.seekMaxPoints)
+		// Reserve the points slice up front (reusing the backing array when it is
+		// already large enough) so a long encode does not repeatedly grow it; it never
+		// exceeds seekMaxPoints.
+		if cap(e.points) < e.seekMaxPoints {
+			e.points = make([]meta.SeekPoint, 0, e.seekMaxPoints)
+		}
 		e.nextBoundary = int64(e.seekInterval)
 		siBody := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0)
 		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
-			return nil, err
+			return err
 		}
 		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
 		if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, len(stBody))); err != nil {
-			return nil, err
+			return err
 		}
 		// SEEKTABLE body offset = "fLaC" + STREAMINFO header (StreamInfoBodyOffset) +
 		// STREAMINFO body + SEEKTABLE header (4).
 		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + 4)
 		if _, err := w.Write(stBody); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := w.Write(meta.EncodeBlockHeader(true, meta.TypePadding, 0)); err != nil { // last=1
-			return nil, err
+			return err
 		}
 	} else {
 		body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders, last=1
 		if err := meta.WriteStreamHeader(w, body); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return e, nil
+	return nil
 }
 
 // Write consumes interleaved little-endian PCM samples. Bytes that do not yet form
@@ -278,7 +353,10 @@ func (e *Encoder) Close() error {
 			return err
 		}
 	}
-	e.leftover = nil
+	// Truncate rather than nil so a pooled encoder keeps the leftover backing array
+	// for the next stream; nilling it would force a reallocation on every reused
+	// clip whose length is not a whole number of blocks (the common case).
+	e.leftover = e.leftover[:0]
 
 	if e.ws == nil {
 		return nil // non-seekable: keep the unknown sentinels written up front
