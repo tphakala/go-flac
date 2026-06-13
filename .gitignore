@@ -24,3 +24,6 @@ coverage.txt
 
 # local tool cache (sentrux/opencode/etc.)
 cache/
+
+# CodeGraph index database (local code intelligence)
+.codegraph/
