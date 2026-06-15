@@ -29,14 +29,14 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 
 	switch {
 	case nch == 2 && p.Stereo != StereoIndependent && bps <= 24:
-		encodeStereo(bw, ws, p, bps, bs, ch[0], ch[1], frameNum)
+		encodeStereo(bw, ws, p, si.SampleRate, bps, bs, ch[0], ch[1], frameNum)
 	case nch == 2 && p.Stereo != StereoIndependent && bps >= 25:
-		encodeStereo64(bw, ws, p, bps, bs, ch[0], ch[1], frameNum)
+		encodeStereo64(bw, ws, p, si.SampleRate, bps, bs, ch[0], ch[1], frameNum)
 	case bps >= 25:
 		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
 		// so upcast each channel to int64 before planning and writing.
 		window := ws.window(p, bs)
-		writeFrameHeader(bw, bs, nch-1, frameNum)
+		writeFrameHeader(bw, bs, nch-1, si.SampleRate, bps, frameNum)
 		buf := ws.ensureL64(bs) // reuse l64; never runs in same frame as encodeStereo64
 		for c := range nch {
 			for i := range bs {
@@ -48,7 +48,7 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 		finishFrame(bw)
 	default:
 		window := ws.window(p, bs)
-		writeFrameHeader(bw, bs, nch-1, frameNum)
+		writeFrameHeader(bw, bs, nch-1, si.SampleRate, bps, frameNum)
 		for c := range nch {
 			plan := planSubframe(ws, 0, ch[c], bps, p, window)
 			writeSubframe(bw, ws, ch[c], bps, &plan, p)
@@ -71,7 +71,7 @@ const (
 // encodeStereo selects a channel assignment by estimated bits and writes it.
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo64
-func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r []int32, frameNum uint64) {
+func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, sampleRate, bps, bs int, l, r []int32, frameNum uint64) {
 	side := ws.ensureSide(bs)
 	mid := ws.ensureMid(bs)
 	for i := range l {
@@ -111,7 +111,7 @@ func encodeStereo(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l, r [
 		}
 	}
 
-	writeFrameHeader(bw, bs, chCode, frameNum)
+	writeFrameHeader(bw, bs, chCode, sampleRate, bps, frameNum)
 	switch chCode {
 	case chLeftSide:
 		writeSubframe(bw, ws, l, bps, &planL, p)
@@ -139,7 +139,7 @@ func finishFrame(bw *bitio.Writer) {
 // arrive as int32 and are upcast to int64 before wide-domain decorrelation.
 //
 //nolint:dupl // intentional: typed parallel of encodeStereo
-func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32, r32 []int32, frameNum uint64) {
+func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, sampleRate, bps, bs int, l32, r32 []int32, frameNum uint64) {
 	l := ws.ensureL64(bs)
 	r := ws.ensureR64(bs)
 	side := ws.ensureSide64(bs)
@@ -180,7 +180,7 @@ func encodeStereo64(bw *bitio.Writer, ws *Workspace, p Params, bps, bs int, l32,
 		}
 	}
 
-	writeFrameHeader(bw, bs, chCode, frameNum)
+	writeFrameHeader(bw, bs, chCode, sampleRate, bps, frameNum)
 	switch chCode {
 	case chLeftSide:
 		writeSubframe64(bw, ws, l, bps, &planL, p)

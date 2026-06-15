@@ -27,7 +27,7 @@ func TestEncodeStereo64RoundTrip32(t *testing.T) {
 
 	bw := bitio.NewWriter()
 	bw.Reset()
-	encodeStereo64(bw, NewWorkspace(bs, 2, 12), p, bps, bs, l, r, 0)
+	encodeStereo64(bw, NewWorkspace(bs, 2, 12), p, si.SampleRate, bps, bs, l, r, 0)
 	data := bw.Bytes()
 
 	var fr Frame
