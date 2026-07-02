@@ -24,4 +24,15 @@ type Config struct {
 	// A stream longer than SeekTableMaxPoints*SeekTableInterval samples leaves its
 	// tail without seek points (still seekable via binary search).
 	SeekTableMaxPoints int
+
+	// TotalSamples, when > 0, declares the total inter-channel sample count so the
+	// encoder writes STREAMINFO.total_samples into the header up front. This lets a
+	// non-seekable sink (bytes.Buffer, io.Pipe) emit a finalized total_samples with
+	// no seek-back. It must equal the number of samples actually written before
+	// Close, which Close verifies; a mismatch is an error. The maximum is 2^36-1
+	// (the FLAC 36-bit field); a larger value is rejected at construction. Leave it
+	// 0 (the default) when the length is unknown up front. MD5 is unaffected (it
+	// stays at the all-zero sentinel for a non-seekable streaming sink); use
+	// EncodeInterleaved for an up-front MD5.
+	TotalSamples uint64
 }

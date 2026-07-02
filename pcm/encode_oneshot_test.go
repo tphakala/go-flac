@@ -2,6 +2,7 @@ package pcm
 
 import (
 	"bytes"
+	"crypto/md5"
 	"sync"
 	"testing"
 )
@@ -50,12 +51,14 @@ func TestEncodeInterleavedRoundTripSeekable(t *testing.T) {
 	}
 }
 
-// TestEncodeInterleavedPlainWriter checks the helper still produces a valid,
-// decodable stream on a non-seekable sink, leaving totals/MD5 at their spec-legal
-// unknown sentinels.
+// TestEncodeInterleavedPlainWriter checks that the helper finalizes total_samples
+// and MD5 on a non-seekable sink (it holds the whole buffer, so it derives the
+// total from len(pcm) and hashes up front). The min/max sizes still fall to the
+// unknown sentinels there, which is spec-legal.
 func TestEncodeInterleavedPlainWriter(t *testing.T) {
 	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 1, CompressionLevel: 2}
-	pcmBytes := genPCM(cfg, 3000)
+	const nSamples = 3000
+	pcmBytes := genPCM(cfg, nSamples)
 
 	var buf bytes.Buffer // *bytes.Buffer is not an io.Seeker
 	if err := EncodeInterleaved(&buf, cfg, pcmBytes); err != nil {
@@ -66,9 +69,78 @@ func TestEncodeInterleavedPlainWriter(t *testing.T) {
 	if !bytes.Equal(got, pcmBytes) {
 		t.Fatalf("round trip mismatch (got %d bytes, want %d)", len(got), len(pcmBytes))
 	}
-	var zero [16]byte
-	if si.MD5 != zero || si.TotalSamples != 0 {
-		t.Errorf("plain writer expected unknown sentinels, got MD5=%x total=%d", si.MD5, si.TotalSamples)
+	if si.TotalSamples != nSamples {
+		t.Errorf("TotalSamples = %d, want %d", si.TotalSamples, nSamples)
+	}
+	if want := md5.Sum(pcmBytes); si.MD5 != want {
+		t.Errorf("MD5 = %x, want md5(input PCM) = %x", si.MD5, want)
+	}
+}
+
+// TestEncodeInterleavedPlainWriterMatchesSeekable verifies that the finalized
+// non-seekable one-shot header carries the same total_samples and MD5 as the
+// seekable one-shot path (only the min/max sizes, which need a seek-back, differ).
+func TestEncodeInterleavedPlainWriterMatchesSeekable(t *testing.T) {
+	cfg := Config{SampleRate: 48000, BitDepth: 24, Channels: 2, CompressionLevel: 8}
+	pcmBytes := genPCM(cfg, 4096*2+777) // two full frames + a short final frame
+
+	var plain bytes.Buffer
+	if err := EncodeInterleaved(&plain, cfg, pcmBytes); err != nil {
+		t.Fatalf("EncodeInterleaved(plain): %v", err)
+	}
+	var sb seekBuffer
+	if err := EncodeInterleaved(&sb, cfg, pcmBytes); err != nil {
+		t.Fatalf("EncodeInterleaved(seekable): %v", err)
+	}
+
+	plainSI, _ := decodeAll(t, bytes.NewReader(plain.Bytes()))
+	seekSI, _ := decodeAll(t, bytes.NewReader(sb.Bytes()))
+	// Both sinks must finalize the same total_samples and MD5 as the known input;
+	// asserting each against the expected value also proves the two sinks agree.
+	wantSamples := uint64(4096*2 + 777)
+	if plainSI.TotalSamples != wantSamples || seekSI.TotalSamples != wantSamples {
+		t.Errorf("TotalSamples: plain=%d seekable=%d, want %d", plainSI.TotalSamples, seekSI.TotalSamples, wantSamples)
+	}
+	wantMD5 := md5.Sum(pcmBytes)
+	if plainSI.MD5 != wantMD5 || seekSI.MD5 != wantMD5 {
+		t.Errorf("MD5: plain=%x seekable=%x, want %x", plainSI.MD5, seekSI.MD5, wantMD5)
+	}
+}
+
+// TestEncodeInterleavedEmpty checks the degenerate empty-buffer one-shot: it
+// produces a valid, decodable zero-sample stream and, like every other one-shot
+// encode, finalizes total_samples (0) and MD5 (of the empty input) identically for
+// a non-seekable and a seekable sink. A caller-set Config.TotalSamples is ignored
+// (the buffer length is authoritative) rather than tripping the Close mismatch
+// check.
+func TestEncodeInterleavedEmpty(t *testing.T) {
+	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5}
+
+	var plain bytes.Buffer
+	if err := EncodeInterleaved(&plain, cfg, nil); err != nil {
+		t.Fatalf("EncodeInterleaved(empty, non-seekable): %v", err)
+	}
+	var sb seekBuffer
+	if err := EncodeInterleaved(&sb, cfg, nil); err != nil {
+		t.Fatalf("EncodeInterleaved(empty, seekable): %v", err)
+	}
+
+	plainSI, got := decodeAll(t, bytes.NewReader(plain.Bytes()))
+	seekSI, _ := decodeAll(t, bytes.NewReader(sb.Bytes()))
+	if len(got) != 0 {
+		t.Fatalf("empty encode decoded to %d bytes, want 0", len(got))
+	}
+	if plainSI.TotalSamples != 0 || seekSI.TotalSamples != 0 {
+		t.Errorf("empty total: non-seekable=%d seekable=%d, want 0", plainSI.TotalSamples, seekSI.TotalSamples)
+	}
+	if want := md5.Sum(nil); plainSI.MD5 != want || seekSI.MD5 != want {
+		t.Errorf("empty MD5: non-seekable=%x seekable=%x, want md5(empty)=%x", plainSI.MD5, seekSI.MD5, want)
+	}
+
+	// A stray caller-set TotalSamples must not survive an empty buffer.
+	cfg.TotalSamples = 12345
+	if err := EncodeInterleaved(&bytes.Buffer{}, cfg, nil); err != nil {
+		t.Fatalf("EncodeInterleaved(empty, caller TotalSamples set): %v", err)
 	}
 }
 

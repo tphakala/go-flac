@@ -18,10 +18,19 @@ const encoderBlockSize = 4096
 // 4096 points is 4096*18 = 72 KiB, ample for typical files at one point per second.
 const defaultSeekMaxPoints = 4096
 
+// maxTotalSamples is the largest value the STREAMINFO total_samples field can hold:
+// it is 36 bits wide (see meta.EncodeStreamInfo), so a larger declared count would
+// be silently truncated by the bit writer.
+const maxTotalSamples = 1<<36 - 1
+
 // Encoder encodes interleaved little-endian PCM written to it into a FLAC stream.
 // It implements io.WriteCloser; Close flushes the final frame and finalizes the
-// STREAMINFO MD5, total samples, and min/max sizes (the last only when the sink is
-// an io.WriteSeeker; otherwise spec-legal "unknown" sentinels remain).
+// STREAMINFO MD5, total samples, and min/max sizes when the sink is an
+// io.WriteSeeker. For a non-seekable sink, total_samples is still finalized up
+// front when Config.TotalSamples is declared, but MD5 and the min/max sizes keep
+// their spec-legal "unknown" sentinels (they are not knowable without seeking
+// back). EncodeInterleaved, which holds the whole buffer, additionally finalizes
+// MD5 up front for a non-seekable sink.
 type Encoder struct {
 	w        io.Writer
 	ws       io.WriteSeeker // non-nil when w is seekable
@@ -42,6 +51,7 @@ type Encoder struct {
 	frameNum           uint64
 	total              uint64
 	wrote              bool
+	skipHash           bool // STREAMINFO MD5 supplied up front (one-shot path): skip per-frame hashing
 	minBlock, maxBlock int
 	minFrame, maxFrame int
 
@@ -62,7 +72,7 @@ var _ io.WriteCloser = (*Encoder)(nil)
 // are 4..32; other depths are rejected.
 func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 	e := &Encoder{}
-	if err := e.init("NewEncoder", w, cfg); err != nil {
+	if err := e.init("NewEncoder", w, cfg, nil); err != nil {
 		return nil, err
 	}
 	return e, nil
@@ -85,16 +95,19 @@ func NewEncoder(w io.Writer, cfg Config) (*Encoder, error) {
 // constructed; on error it must not be used. Reset may be called on a closed
 // encoder, which is the usual pooling pattern (Reset, Write, Close, repeat).
 func (e *Encoder) Reset(w io.Writer, cfg Config) error {
-	return e.init("Reset", w, cfg)
+	return e.init("Reset", w, cfg, nil)
 }
 
 // init (re)initializes e to write a fresh FLAC stream to w using cfg. It backs
-// both NewEncoder (on a zero-valued Encoder) and Reset (on a previously used one);
-// op names the calling API for error messages. The large buffers (ch, work) are
-// reused when the channel count and LPC order are unchanged from the previous
-// configuration, and the shape-independent bw and md5 are reused once allocated,
-// so a same-shape re-init allocates only the small fixed metadata header.
-func (e *Encoder) init(op string, w io.Writer, cfg Config) error {
+// NewEncoder (on a zero-valued Encoder), Reset (on a previously used one), and the
+// one-shot EncodeInterleaved path; op names the calling API for error messages.
+// knownMD5, when non-nil, is the whole-input STREAMINFO MD5 precomputed by the
+// one-shot path: it is written into the placeholder up front and the per-frame
+// hashing is skipped (it would only recompute the same digest). The large buffers
+// (ch, work) are reused when the channel count and LPC order are unchanged from the
+// previous configuration, and the shape-independent bw and md5 are reused once
+// allocated, so a same-shape re-init allocates only the small fixed metadata header.
+func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) error {
 	if w == nil {
 		return fmt.Errorf("go-flac/pcm: %s: nil writer", op)
 	}
@@ -105,6 +118,10 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config) error {
 	}
 	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
 		return fmt.Errorf("go-flac/pcm: %s: bit depth %d outside supported 4..32", op, cfg.BitDepth)
+	}
+	if cfg.TotalSamples > maxTotalSamples {
+		// Reject a declared total that would not fit the 36-bit STREAMINFO field.
+		return fmt.Errorf("go-flac/pcm: %s: total samples %d exceeds the FLAC maximum of 2^36-1", op, cfg.TotalSamples)
 	}
 
 	params := paramsForLevel(cfg.CompressionLevel)
@@ -124,7 +141,15 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config) error {
 		e.ws = ws
 	}
 	e.cfg = cfg
-	e.si = flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth}
+	// TotalSamples (when declared) and a precomputed MD5 (from the one-shot
+	// EncodeInterleaved path) are folded into the up-front STREAMINFO placeholder so
+	// a non-seekable sink emits a finalized header with no seek-back. Both placeholder
+	// writers below read e.si, so the values flow into whichever branch runs.
+	e.si = flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth, TotalSamples: cfg.TotalSamples}
+	e.skipHash = knownMD5 != nil
+	if e.skipHash {
+		e.si.MD5 = *knownMD5
+	}
 	e.params = params
 	e.bytesPS = (cfg.BitDepth + 7) / 8
 	e.frameLen = e.bytesPS * cfg.Channels
@@ -292,8 +317,12 @@ func (e *Encoder) emitBlock(chunk []byte, n int, final bool) error {
 	// durably written and a caller that retries the same input cannot double-hash
 	// it. deinterleaveSamples and EncodeFrame read chunk but never modify it, so
 	// deferring the hash is byte-identical to the previous order on the success
-	// path (verified by the byte-identical golden test).
-	e.md5.Write(chunk)
+	// path (verified by the byte-identical golden test). When the MD5 is supplied
+	// up front (the one-shot EncodeInterleaved path), per-frame hashing would only
+	// recompute the same digest, so it is skipped.
+	if !e.skipHash {
+		e.md5.Write(chunk)
+	}
 	if e.seekInterval > 0 && len(e.points) < e.seekMaxPoints {
 		if frameOffset == 0 || int64(firstSample) >= e.nextBoundary {
 			e.points = append(e.points, meta.SeekPoint{
@@ -358,12 +387,24 @@ func (e *Encoder) Close() error {
 	// clip whose length is not a whole number of blocks (the common case).
 	e.leftover = e.leftover[:0]
 
+	// Verify a declared total against what was actually written, for both sink
+	// types, so a wrong Config.TotalSamples surfaces here instead of as a silently
+	// wrong duration in the finalized header.
+	if e.cfg.TotalSamples > 0 && e.total != e.cfg.TotalSamples {
+		return fmt.Errorf("go-flac/pcm: Close: wrote %d samples but Config.TotalSamples declared %d", e.total, e.cfg.TotalSamples)
+	}
+
 	if e.ws == nil {
-		return nil // non-seekable: keep the unknown sentinels written up front
+		return nil // non-seekable: the header was finalized up front (or kept at the
+		// spec-legal unknown sentinels when nothing was declared)
 	}
 	si := e.si
 	si.TotalSamples = e.total
-	copy(si.MD5[:], e.md5.Sum(nil))
+	if !e.skipHash {
+		// When the MD5 was supplied up front, si.MD5 already carries it (set in init);
+		// only the internally hashed path needs to fold in the running digest here.
+		copy(si.MD5[:], e.md5.Sum(nil))
+	}
 	body := meta.EncodeStreamInfo(si, e.minBlock, e.maxBlock, e.minFrame, e.maxFrame)
 	if _, err := e.ws.Seek(int64(meta.StreamInfoBodyOffset), io.SeekStart); err != nil {
 		return fmt.Errorf("go-flac/pcm: Close: seek to STREAMINFO: %w", err)
