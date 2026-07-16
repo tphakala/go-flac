@@ -33,7 +33,7 @@ jobs:
           submodules: recursive
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -91,7 +91,7 @@ jobs:
         with:
           submodules: recursive
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Run golangci-lint
@@ -112,7 +112,7 @@ jobs:
         with:
           submodules: recursive
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Run go vet
@@ -133,7 +133,7 @@ jobs:
         with:
           submodules: recursive
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: Build
