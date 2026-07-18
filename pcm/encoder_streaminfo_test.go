@@ -49,6 +49,12 @@ func TestStreamInfoFixedBlockSizeExcludesShortFinalBlock(t *testing.T) {
 		{"oneFull", encoderBlockSize, encoderBlockSize, encoderBlockSize},
 		// A stream shorter than one block is a single (last) block; min==max==its size.
 		{"singleShort", 100, 100, 100},
+		// Below the FLAC minimum block size, Close floors the field to the spec
+		// minimum (16); the sole block is the last block, which is exempt from the
+		// minimum, so the advertised value stays legal. 16 is pinned as a literal so a
+		// regression lowering the constant below the RFC floor is caught.
+		{"subMinimumFloored", 15, 16, 16},
+		{"singleSampleFloored", 1, 16, 16},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -3,6 +3,7 @@ package pcm
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,13 +148,13 @@ func TestNonSeekableCrossValidateNoIncrementWarning(t *testing.T) {
 	}
 }
 
-// TestStreamInfoNonSeekableUnknownLengthKeepsSentinel documents the boundary of
-// the fix: without a declared TotalSamples the non-seekable path cannot know the
-// block size up front (a short final block is indistinguishable from a full one
-// until the stream ends), so it keeps the 0 "unknown" sentinel. Callers that need
-// a seekable, strict-decoder-friendly stream on a non-seekable sink must declare
-// TotalSamples (EncodeInterleaved does so from the buffer length).
-func TestStreamInfoNonSeekableUnknownLengthKeepsSentinel(t *testing.T) {
+// TestStreamInfoNonSeekableUnknownLengthAdvertisesBlockSize verifies that without a
+// declared TotalSamples the non-seekable path advertises encoderBlockSize rather
+// than the illegal 0 "unknown" sentinel. RFC 9639 requires the min/max block-size
+// fields to be in 16..65535 and permits an advertised bound wider than the blocks
+// actually written; encoderBlockSize is the only block size this encoder emits, and
+// a shorter final block is exempt from the minimum, so it is valid for any length.
+func TestStreamInfoNonSeekableUnknownLengthAdvertisesBlockSize(t *testing.T) {
 	var buf bytes.Buffer
 	enc, err := NewEncoder(&buf, Config{SampleRate: 48000, Channels: 1, BitDepth: 16}) // no TotalSamples
 	if err != nil {
@@ -169,7 +170,32 @@ func TestStreamInfoNonSeekableUnknownLengthKeepsSentinel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metadata: %v", err)
 	}
-	if sm.MinBlock != 0 || sm.MaxBlock != 0 {
-		t.Errorf("MinBlock=%d MaxBlock=%d, want 0/0 sentinel when length is undeclared", sm.MinBlock, sm.MaxBlock)
+	if sm.MinBlock != encoderBlockSize || sm.MaxBlock != encoderBlockSize {
+		t.Errorf("MinBlock=%d MaxBlock=%d, want %d/%d for an undeclared length (never the illegal 0 sentinel)", sm.MinBlock, sm.MaxBlock, encoderBlockSize, encoderBlockSize)
+	}
+}
+
+// TestStreamInfoNonSeekableClampsBelowMinimum verifies that a declared length below
+// the FLAC minimum block size still yields a spec-legal min/max block size. RFC 9639
+// forbids 0 and 1..15 in those fields, so a sub-16 declared total is floored to 16
+// (the single short block is the last block, which is exempt from the minimum).
+// Declared totals of 16 or more keep their exact single-block size.
+func TestStreamInfoNonSeekableClampsBelowMinimum(t *testing.T) {
+	cases := []struct {
+		nSamples int
+		want     int
+	}{
+		// The spec minimum is pinned as the literal 16, not minStreamInfoBlockSize, so
+		// a regression that lowered the constant below the RFC-mandated floor would be
+		// caught (expectation and code must not move in lockstep).
+		{1, 16}, {15, 16}, {16, 16}, {17, 17}, {1000, 1000},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("n%d", c.nSamples), func(t *testing.T) {
+			minB, maxB := streamInfoBlockSizesNonSeekable(t, c.nSamples)
+			if minB != c.want || maxB != c.want {
+				t.Errorf("n=%d: MinBlock=%d MaxBlock=%d, want %d/%d", c.nSamples, minB, maxB, c.want, c.want)
+			}
+		})
 	}
 }

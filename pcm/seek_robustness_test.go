@@ -41,9 +41,14 @@ func TestNewDecoderDegradesWhenSeekEndUnsupported(t *testing.T) {
 	}
 }
 
-// encodeRampNonSeekable encodes the ramp to a plain io.Writer (not an io.WriteSeeker),
-// so the encoder cannot patch STREAMINFO and leaves the max block size at 0 (unknown).
-func encodeRampNonSeekable(t *testing.T, channels, bps, samples int) []byte {
+// encodeRampUnknownMaxBlock encodes the ramp, then zeroes STREAMINFO's min/max
+// block-size fields to synthesize a stream whose max block size is unknown
+// (MaxBlock == 0). go-flac's own encoder no longer emits 0 there (it now finalizes a
+// spec-legal block size up front even on a non-seekable sink, see upfrontBlockSize),
+// but foreign streams, notably libFLAC streaming output, still can, and the decoder
+// must seek in them by discovering the nominal block size from the first frame. This
+// keeps that decoder path covered now that the encoder cannot produce the input for it.
+func encodeRampUnknownMaxBlock(t *testing.T, channels, bps, samples int) []byte {
 	t.Helper()
 	var buf bytes.Buffer // io.Writer but NOT io.WriteSeeker
 	enc, err := NewEncoder(&buf, Config{SampleRate: 44100, Channels: channels, BitDepth: bps, CompressionLevel: 2})
@@ -56,15 +61,22 @@ func encodeRampNonSeekable(t *testing.T, channels, bps, samples int) []byte {
 	if err := enc.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return buf.Bytes()
+	data := buf.Bytes()
+	// STREAMINFO body starts at byte 8 ("fLaC" marker + 4-byte block header); the min
+	// block size is bytes 8..9 and the max block size bytes 10..11 (big-endian uint16).
+	// Zero both to reproduce the "unknown block size" stream the decoder's
+	// discover-from-first-frame seek path handles. The block-size fields are covered by
+	// no checksum, so patching them yields a well-formed metadata block.
+	data[8], data[9], data[10], data[11] = 0, 0, 0, 0
+	return data
 }
 
 func TestSeekStreamWithoutMaxBlockSize(t *testing.T) {
-	// A non-seekable encode leaves STREAMINFO max block size at 0 (unknown). Seeking from
-	// a seekable source must still land sample-accurately by discovering the nominal block
-	// size from the first frame.
+	// A stream with STREAMINFO max block size 0 (unknown), as a foreign streaming
+	// encoder can produce. Seeking from a seekable source must still land
+	// sample-accurately by discovering the nominal block size from the first frame.
 	const ch, bps, n = 2, 16, 5*4096 + 13
-	data := encodeRampNonSeekable(t, ch, bps, n)
+	data := encodeRampUnknownMaxBlock(t, ch, bps, n)
 	sm, err := meta.ReadMetadata(bitio.NewReader(bytes.NewReader(data)))
 	if err != nil {
 		t.Fatal(err)
