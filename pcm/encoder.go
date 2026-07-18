@@ -98,6 +98,23 @@ func (e *Encoder) Reset(w io.Writer, cfg Config) error {
 	return e.init("Reset", w, cfg, nil)
 }
 
+// upfrontBlockSize returns the STREAMINFO min/max block size to finalize before any
+// frame is written, or 0 when it is not yet knowable. Only a non-seekable sink needs
+// it (a seekable sink is patched with the measured value in Close, so this returns 0
+// for one). The encoder uses one fixed block size (encoderBlockSize), so a stream
+// whose length is declared via Config.TotalSamples has min == max ==
+// min(total, encoderBlockSize): every block is encoderBlockSize except a
+// possibly-short final one, which the FLAC min/max-blocksize definition excludes.
+// Without a declared length the block size is not knowable up front (a short final
+// block is indistinguishable from a full one until the stream ends), so it returns 0
+// and the header keeps the "unknown" sentinel.
+func upfrontBlockSize(seekable bool, cfg Config) int {
+	if seekable || cfg.TotalSamples == 0 {
+		return 0
+	}
+	return int(min(cfg.TotalSamples, uint64(encoderBlockSize)))
+}
+
 // init (re)initializes e to write a fresh FLAC stream to w using cfg. It backs
 // NewEncoder (on a zero-valued Encoder), Reset (on a previously used one), and the
 // one-shot EncodeInterleaved path; op names the calling API for error messages.
@@ -230,7 +247,18 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 			return fmt.Errorf("go-flac/pcm: %s: write PADDING header: %w", op, err)
 		}
 	} else {
-		body := meta.EncodeStreamInfo(e.si, 0, 0, 0, 0) // placeholders, last=1
+		// For a non-seekable sink the up-front header is final: Close cannot seek back
+		// to patch it (see Close's e.ws == nil early return). Finalize the min/max
+		// block size now when it is knowable so the header is not left with the 0
+		// "unknown" sentinel, which a decoder would multiply into every fixed-blocksize
+		// frame's running sample number (frame_number * max_blocksize), collapsing them
+		// all to sample 0. That trips libFLAC's "sample or frame number does not
+		// increase correctly" check and makes strict decoders (Apple CoreAudio, browser
+		// Web Audio) reject the stream. The min/max frame *byte* sizes stay 0 (not
+		// knowable without encoding first, and not required by decoders). A seekable
+		// sink keeps the 0 placeholder and is patched with the measured value in Close.
+		blk := upfrontBlockSize(e.ws != nil, cfg)
+		body := meta.EncodeStreamInfo(e.si, blk, blk, 0, 0) // frame sizes unknown; last=1
 		if err := meta.WriteStreamHeader(w, body); err != nil {
 			return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
 		}
