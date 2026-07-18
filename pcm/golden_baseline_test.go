@@ -35,12 +35,18 @@ func goldenCase(t *testing.T, sampleRate, channels, bitDepth, level int) []byte 
 }
 
 func TestInt32OutputUnchanged(t *testing.T) {
+	// goldenCase encodes to a non-seekable bytes.Buffer without declaring
+	// TotalSamples, so STREAMINFO min/max block size is finalized up front. These
+	// hashes were regenerated when that field changed from the illegal 0 "unknown"
+	// sentinel to encoderBlockSize (4096); the only bytes that differ from the prior
+	// baseline are STREAMINFO offsets 8..11 (the min/max block-size fields), verified
+	// by zeroing them and reproducing the old hashes. The encoded audio is unchanged.
 	want := map[string]string{
-		"44100/1/16/5": "2449f4597b5ce42c950f78ae85613ee9bd44b3a98222cef555b63780acb23b79",
-		"44100/2/16/5": "8fe9c3a04de7da0885f4a664320e09c76038af96a494a1018be22256066bc61f",
-		"48000/2/24/8": "35a07d967bc55f6c76fa879c28313a14e49ec60d3fd1c2f20908a80691c9b779",
-		"44100/2/16/0": "8bab4d771c55eeb4a4b59fcfc72e4669bd3a9848cafd473f86492212755cce9e",
-		"96000/2/24/3": "ee6ec91fe033a2cae8af887cce5e277301a3b8d792b308f346b78ad9b3ac2945",
+		"44100/1/16/5": "c346650b1e0ecb9dd1b9609a9529255763baca56687feace241a7c1dc2b97213",
+		"44100/2/16/5": "1a066116c9163906b5c43c5f6add17f3fef71b4d07dc5ad48321760abe790dd3",
+		"48000/2/24/8": "aa1f9fdcaa157a25365174fbf50207bcf966c4be899445ee602265c9313e44c6",
+		"44100/2/16/0": "acb17a7669eda09f234123032b25e71c66365f529dcef82b89adcad910a550ac",
+		"96000/2/24/3": "7080617c7512f76962b93eba1323069d63f1a5b31e2df8f6eb153e8f4be207cf",
 	}
 	cases := []struct{ sr, ch, bd, lvl int }{
 		{44100, 1, 16, 5}, {44100, 2, 16, 5}, {48000, 2, 24, 8},
