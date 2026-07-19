@@ -29,11 +29,12 @@ type Decoder struct {
 	seekPoints   []meta.SeekPoint // parsed SEEKTABLE points (nil when absent); narrows seeks
 
 	frame      frame.Frame
-	probeFrame frame.Frame // scratch frame decoded by seek probes
-	probeBuf   []byte      // reusable seek-probe read buffer
-	buf        []byte      // packed PCM backing buffer, reused across frames
-	pending    []byte      // unread window into buf
-	bytesPS    int         // bytes per sample = ceil(bps/8)
+	probeFrame frame.Frame  // scratch frame decoded by seek probes
+	probeBuf   []byte       // reusable seek-probe read buffer
+	resyncR    bitio.Reader // reusable scratch reader for the resync scan (avoids per-probe alloc)
+	buf        []byte       // packed PCM backing buffer, reused across frames
+	pending    []byte       // unread window into buf
+	bytesPS    int          // bytes per sample = ceil(bps/8)
 	md5        hash.Hash
 	decoded    uint64 // inter-channel samples decoded so far
 	seeked     bool   // a seek happened; disables MD5 + truncation checks
@@ -77,13 +78,13 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 	}
 	if seekable {
 		audioStart := base + br.BytesRead()
-		resume, serr := rs.Seek(0, io.SeekCurrent) // bufio-advanced absolute file pos
+		resume, serr := rs.Seek(0, io.SeekCurrent) // read-ahead-advanced absolute file pos
 		var streamEnd int64
 		if serr == nil {
 			streamEnd, serr = rs.Seek(0, io.SeekEnd)
 		}
 		if serr == nil {
-			if _, rerr := rs.Seek(resume, io.SeekStart); rerr != nil { // restore; bufio buffer stays valid
+			if _, rerr := rs.Seek(resume, io.SeekStart); rerr != nil { // restore; owned read-ahead buffer stays valid
 				// The cursor was advanced to EOF to measure length but cannot be restored,
 				// so the reader can no longer forward-decode: surface this as a hard error.
 				return nil, rerr
@@ -253,7 +254,7 @@ func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 		// A short read means the source ended before the measured streamEnd (truncated
 		// since NewDecoder measured it), so this is the physical end of the stream.
 		atEnd := b+int64(rn) >= d.streamEnd || int64(rn) < n
-		s, consumed, res := frame.FindNextFrame(buf, d.info, &d.probeFrame)
+		s, consumed, res := frame.FindNextFrame(&d.resyncR, buf, d.info, &d.probeFrame)
 		switch res {
 		case frame.FrameFound:
 			return b + int64(s), b + int64(s+consumed), true, nil

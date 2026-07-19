@@ -256,8 +256,9 @@ func truncateAtFrameBoundary(t *testing.T, data []byte, n int) []byte {
 	audio := int(br.BytesRead())
 	off := audio
 	var fr frame.Frame
+	var r bitio.Reader
 	for i := range n {
-		s, consumed, res := frame.FindNextFrame(data[off:], sm.Info, &fr)
+		s, consumed, res := frame.FindNextFrame(&r, data[off:], sm.Info, &fr)
 		if res != frame.FrameFound {
 			t.Fatalf("frame %d not found: %v", i, res)
 		}

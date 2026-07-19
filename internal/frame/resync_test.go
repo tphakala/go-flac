@@ -16,7 +16,8 @@ func TestFindNextFrameLocatesAndVerifies(t *testing.T) {
 	data := append(bytes.Clone(junk), frameBytes...)
 
 	var fr Frame
-	start, consumed, res := FindNextFrame(data, si, &fr)
+	var r bitio.Reader
+	start, consumed, res := FindNextFrame(&r, data, si, &fr)
 	if res != FrameFound {
 		t.Fatalf("res = %v, want FrameFound", res)
 	}
@@ -32,7 +33,8 @@ func TestFindNextFrameTruncatedTail(t *testing.T) {
 	frameBytes, si := oneFrameBytes(t)
 	data := frameBytes[:len(frameBytes)-3] // cut the CRC-16 / tail off
 	var fr Frame
-	_, _, res := FindNextFrame(data, si, &fr)
+	var r bitio.Reader
+	_, _, res := FindNextFrame(&r, data, si, &fr)
 	if res != FrameTruncated {
 		t.Fatalf("res = %v, want FrameTruncated", res)
 	}
@@ -41,7 +43,8 @@ func TestFindNextFrameTruncatedTail(t *testing.T) {
 func TestFindNextFrameNotFound(t *testing.T) {
 	_, si := oneFrameBytes(t)
 	var fr Frame
-	_, _, res := FindNextFrame([]byte{0x01, 0x02, 0x03, 0x04}, si, &fr)
+	var r bitio.Reader
+	_, _, res := FindNextFrame(&r, []byte{0x01, 0x02, 0x03, 0x04}, si, &fr)
 	if res != FrameNotFound {
 		t.Fatalf("res = %v, want FrameNotFound", res)
 	}
