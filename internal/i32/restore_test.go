@@ -172,7 +172,7 @@ func TestRestore_AllocFree(t *testing.T) {
 	src := make([]int32, 1024)
 	fillRestoreSrc(src)
 	dst := make([]int32, 1024)
-	restores := map[string]func(dst, src []int32){"Restore1": Restore1, "Restore2": Restore2, "Restore3": Restore3, "Restore4": Restore4}
+	restores := map[string]func(dst, src []int32){restoreNames[1]: Restore1, restoreNames[2]: Restore2, restoreNames[3]: Restore3, restoreNames[4]: Restore4}
 	for name, fn := range restores {
 		if got := testing.AllocsPerRun(100, func() { fn(dst, src) }); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", name, got)

@@ -106,12 +106,12 @@ func FuzzI32Diff(f *testing.F) {
 		ref  func(dst, src []int32)
 	}
 	pairs := []diffPair{
-		{"Diff1", Diff1, diff1Go}, {"Diff2", Diff2, diff2Go},
-		{"Diff3", Diff3, diff3Go}, {"Diff4", Diff4, diff4Go},
+		{diffNames[1], Diff1, diff1Go}, {diffNames[2], Diff2, diff2Go},
+		{diffNames[3], Diff3, diff3Go}, {diffNames[4], Diff4, diff4Go},
 	}
 	restorePairs := []diffPair{
-		{"Restore1", Restore1, restore1Go}, {"Restore2", Restore2, restore2Go},
-		{"Restore3", Restore3, restore3Go}, {"Restore4", Restore4, restore4Go},
+		{restoreNames[1], Restore1, restore1Go}, {restoreNames[2], Restore2, restore2Go},
+		{restoreNames[3], Restore3, restore3Go}, {restoreNames[4], Restore4, restore4Go},
 	}
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		src := i32sFromBits(raw)

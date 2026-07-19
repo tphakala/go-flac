@@ -7,6 +7,14 @@ import (
 	"testing"
 )
 
+// diffNames and restoreNames index the fixed-predictor helpers by predictor
+// order, so every subtest and fuzz table names them from one place instead of
+// repeating the literals. Index 0 is unused; orders run 1..4.
+var (
+	diffNames    = [5]string{"", "Diff1", "Diff2", "Diff3", "Diff4"}
+	restoreNames = [5]string{"", "Restore1", "Restore2", "Restore3", "Restore4"}
+)
+
 // Tests for the fixed-predictor encode differences Diff1..Diff4.
 //
 // DiffK(dst, src) writes the order-K forward finite difference: the first K
@@ -41,7 +49,7 @@ func TestDiffOrders(t *testing.T) {
 	// the pure-Go fallback (len < threshold) are exercised through the public API.
 	for _, src := range [][]int32{full, full[:6]} {
 		for order := 1; order <= 4; order++ {
-			t.Run([]string{"", "Diff1", "Diff2", "Diff3", "Diff4"}[order], func(t *testing.T) {
+			t.Run(diffNames[order], func(t *testing.T) {
 				dst := make([]int32, len(src))
 				diffs[order-1](dst, src)
 				want := diffResidualRepeated(src, order)
@@ -128,7 +136,7 @@ func TestDiff_Empty(t *testing.T) {
 func TestDiff_AllocFree(t *testing.T) {
 	src := make([]int32, 1024)
 	dst := make([]int32, 1024)
-	diffs := map[string]func(dst, src []int32){"Diff1": Diff1, "Diff2": Diff2, "Diff3": Diff3, "Diff4": Diff4}
+	diffs := map[string]func(dst, src []int32){diffNames[1]: Diff1, diffNames[2]: Diff2, diffNames[3]: Diff3, diffNames[4]: Diff4}
 	for name, fn := range diffs {
 		if got := testing.AllocsPerRun(100, func() { fn(dst, src) }); got != 0 {
 			t.Errorf("%s allocated %v times per run, want 0", name, got)
