@@ -18,6 +18,26 @@ func apodizationWindow(p Params, n int) []float64 {
 	return lpc.TukeyWindow(n, 0.5)
 }
 
+// frameByteBound returns a generous best-effort ESTIMATE, in bytes, of the encoded
+// size of one frame of bs samples across nch channels at bps bits per sample.
+// EncodeFrame passes it to bw.Grow purely as a capacity hint so flushWord's 8-byte
+// writes land in already-reserved space instead of paying slice-growth bookkeeping
+// (or a reallocation) on most frames. It is NOT a proven upper bound, and
+// correctness never depends on it: Grow only reserves capacity and never changes
+// emitted bytes, so if the estimate is too small flushWord's append simply grows
+// the buffer further, exactly as it would with no Grow call at all.
+//
+// The estimate budgets bps+1 bits per sample per channel (the +1 is really needed
+// only by the mid/side "side" channel, but applying it uniformly keeps the formula
+// simple and covers the wide bps >= 25 path), plus per-subframe header slop, a
+// worst-case frame header of 128 bits (32 fixed + up to 56 for a 7-byte UTF-8 frame
+// number + up to 16 for a blocksize escape + up to 16 for a samplerate escape + 8
+// CRC-8), the trailing CRC-16, and final byte-alignment padding.
+func frameByteBound(nch, bs, bps int) int {
+	bits := nch*bs*(bps+1) + nch*8 /* subframe headers */ + 128 /* worst-case frame header */ + 16 /* CRC-16 */ + 8 /* alignment */
+	return (bits + 7) / 8
+}
+
 // EncodeFrame encodes one frame (one block per channel) into bw and returns the
 // assembled frame bytes. bw is Reset at entry; the returned slice aliases bw's
 // buffer and is valid until the next use of bw.
@@ -26,6 +46,10 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 	bs := len(ch[0])
 	bps := si.BitDepth
 	nch := len(ch)
+	// Pre-grow once we know this frame's shape; a repeat call once the buffer's
+	// capacity has already reached the bound (the common case after the first
+	// frame or two, since Reset retains capacity) is a cheap no-op.
+	bw.Grow(frameByteBound(nch, bs, bps))
 
 	switch {
 	case nch == 2 && p.Stereo != StereoIndependent && bps <= 24:

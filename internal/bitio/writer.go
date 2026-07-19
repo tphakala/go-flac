@@ -1,6 +1,9 @@
 package bitio
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"slices"
+)
 
 // Writer packs bits MSB-first into an in-memory byte buffer. It is the inverse of
 // Reader. Each frame is assembled in full, then its CRC fields are computed over
@@ -19,6 +22,23 @@ type Writer struct {
 
 // NewWriter returns an empty Writer.
 func NewWriter() *Writer { return &Writer{} }
+
+// Grow reserves capacity for at least n more bytes beyond the writer's current
+// length, without changing len(buf) or touching the pending bit accumulator.
+// A caller that knows a safe upper bound on the bytes it is about to write (for
+// example, a frame encoder sizing the writer for one block before encoding it)
+// should call Grow with that bound once at the start of the work, so
+// flushWord's repeated 8-byte appends land in already-reserved capacity
+// instead of paying append's growth bookkeeping, or reallocating, on every
+// full word. Grow never truncates or otherwise mutates buf's existing
+// contents; it is purely a capacity hint, so it cannot change the bytes a
+// later Bytes() call returns. n <= 0 is a no-op.
+func (w *Writer) Grow(n int) {
+	if n <= 0 {
+		return
+	}
+	w.buf = slices.Grow(w.buf, n)
+}
 
 // WriteBits writes the low n bits of v, most-significant bit first. n must be in
 // 0..57 (existing callers write at most 36, the STREAMINFO total-samples field).
@@ -46,11 +66,12 @@ func (w *Writer) WriteBits(v uint64, n uint) {
 }
 
 // flushWord appends the full 64-bit accumulator as 8 big-endian bytes and clears
-// it. It is only called when the register is exactly full.
+// it. It is only called when the register is exactly full. AppendUint64 writes the
+// 8 bytes in one step (into Grow-reserved capacity when the caller pre-grew bw),
+// avoiding the separate zero-fill then overwrite that a plain append followed by
+// PutUint64 would do.
 func (w *Writer) flushWord() {
-	i := len(w.buf)
-	w.buf = append(w.buf, 0, 0, 0, 0, 0, 0, 0, 0)
-	binary.BigEndian.PutUint64(w.buf[i:], w.acc)
+	w.buf = binary.BigEndian.AppendUint64(w.buf, w.acc)
 	w.acc = 0
 }
 
