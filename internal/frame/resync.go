@@ -28,12 +28,16 @@ const (
 // 0 bit). Each candidate is fully decoded so CRC-16 rejects a false sync inside
 // residual data. It returns the start offset within data, the byte length of the
 // decoded frame, and a result code.
-func FindNextFrame(data []byte, si flac.StreamInfo, dst *Frame) (start, consumed int, res FindResult) {
+//
+// r is scratch: it is Reset for each candidate. Callers that scan repeatedly (the
+// seek probe binary search) pass one reused Reader so its owned read block is not
+// reallocated per call.
+func FindNextFrame(r *bitio.Reader, data []byte, si flac.StreamInfo, dst *Frame) (start, consumed int, res FindResult) {
 	for i := 0; i+1 < len(data); i++ {
 		if data[i] != 0xFF || data[i+1]&0xFE != 0xF8 {
 			continue
 		}
-		r := bitio.NewReader(bytes.NewReader(data[i:]))
+		r.Reset(bytes.NewReader(data[i:]))
 		err := Decode(r, si, dst)
 		if err == nil {
 			return i, int(r.BytesRead()), FrameFound
