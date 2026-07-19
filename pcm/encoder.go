@@ -140,6 +140,24 @@ func upfrontBlockSize(seekable bool, cfg Config) int {
 	return max(blk, minStreamInfoBlockSize)
 }
 
+// validateConfig checks the codec-relevant Config fields shared by the streaming
+// Encoder and the FrameEncoder. op names the calling API for the error message.
+func validateConfig(op string, cfg Config) error {
+	if cfg.SampleRate <= 0 || cfg.SampleRate > 655350 || cfg.Channels < 1 || cfg.Channels > 8 {
+		// 655350 Hz is the FLAC maximum; the STREAMINFO sample-rate field is 20 bits,
+		// so a larger rate would be silently truncated.
+		return fmt.Errorf("go-flac/pcm: %s: invalid config %+v", op, cfg)
+	}
+	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
+		return fmt.Errorf("go-flac/pcm: %s: bit depth %d outside supported 4..32", op, cfg.BitDepth)
+	}
+	if cfg.TotalSamples > maxTotalSamples {
+		// Reject a declared total that would not fit the 36-bit STREAMINFO field.
+		return fmt.Errorf("go-flac/pcm: %s: total samples %d exceeds the FLAC maximum of 2^36-1", op, cfg.TotalSamples)
+	}
+	return nil
+}
+
 // init (re)initializes e to write a fresh FLAC stream to w using cfg. It backs
 // NewEncoder (on a zero-valued Encoder), Reset (on a previously used one), and the
 // one-shot EncodeInterleaved path; op names the calling API for error messages.
@@ -153,17 +171,8 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 	if w == nil {
 		return fmt.Errorf("go-flac/pcm: %s: nil writer", op)
 	}
-	if cfg.SampleRate <= 0 || cfg.SampleRate > 655350 || cfg.Channels < 1 || cfg.Channels > 8 {
-		// 655350 Hz is the FLAC maximum; the STREAMINFO sample-rate field is 20 bits,
-		// so a larger rate would be silently truncated.
-		return fmt.Errorf("go-flac/pcm: %s: invalid config %+v", op, cfg)
-	}
-	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
-		return fmt.Errorf("go-flac/pcm: %s: bit depth %d outside supported 4..32", op, cfg.BitDepth)
-	}
-	if cfg.TotalSamples > maxTotalSamples {
-		// Reject a declared total that would not fit the 36-bit STREAMINFO field.
-		return fmt.Errorf("go-flac/pcm: %s: total samples %d exceeds the FLAC maximum of 2^36-1", op, cfg.TotalSamples)
+	if err := validateConfig(op, cfg); err != nil {
+		return err
 	}
 
 	params := paramsForLevel(cfg.CompressionLevel)
