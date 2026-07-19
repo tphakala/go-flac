@@ -1,9 +1,29 @@
 package meta
 
 import (
+	"bytes"
+	"fmt"
+
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
 )
+
+// DecodeStreamInfo parses a 34-byte STREAMINFO metadata block body into a
+// flac.StreamInfo. It is the inverse of EncodeStreamInfo and the entry point a
+// container demuxer uses to recover stream properties from a codec box (for
+// example an MP4 dfLa box, whose payload is exactly this body). body must be
+// StreamInfoBodyLen bytes; the min/max block and frame sizes are validated for
+// length but not returned, as a container reader does not need them.
+func DecodeStreamInfo(body []byte) (flac.StreamInfo, error) {
+	if len(body) != StreamInfoBodyLen {
+		return flac.StreamInfo{}, fmt.Errorf("meta: STREAMINFO body is %d bytes, want %d", len(body), StreamInfoBodyLen)
+	}
+	si, _, _, _, err := readStreamInfo(bitio.NewReader(bytes.NewReader(body)))
+	if err != nil {
+		return flac.StreamInfo{}, err
+	}
+	return si, nil
+}
 
 // readStreamInfo parses the 34-byte STREAMINFO body. The block header (type and
 // length) has already been consumed by the caller. Layout: 16-bit min block size,
