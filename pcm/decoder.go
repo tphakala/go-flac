@@ -122,6 +122,14 @@ const maxProbeWindow = 1 << 24 // 16 MiB
 // or past the true end of an unknown-length stream, positions at end-of-stream and
 // returns the stream's total sample count (the next read is io.EOF). A negative index
 // returns ErrInvalidSeek; a non-seekable source returns ErrSeekUnsupported.
+//
+// A seek that fails after those two argument checks leaves the decoder in a hard-failed
+// state, whether the failure came from the source (an I/O error while probing) or from
+// the stream itself (a frame that will not decode at the landing offset). The error is
+// sticky, so a subsequent Read or WriteTo returns it rather than resuming from an
+// indeterminate position. Retrying the seek, once the condition that caused it is gone,
+// clears the state. ErrInvalidSeek and ErrSeekUnsupported are argument and capability
+// errors that touch no state, so they leave the decoder readable.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
@@ -137,7 +145,7 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 		// fixed-blocksize nominal block size from the first frame so frame numbers map to
 		// sample numbers; for a variable-blocksize stream it stays 0 and is unused.
 		if err := d.ensureNominalBlock(); err != nil {
-			return 0, err
+			return d.seekFailed(err)
 		}
 	}
 	lo, hi := d.audioStart, d.streamEnd
@@ -146,14 +154,14 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	}
 	landStart, fs, endSample, err := d.searchFrame(sampleIndex, lo, hi)
 	if err != nil {
-		return 0, err
+		return d.seekFailed(err)
 	}
 	if landStart < 0 { // target is past the true end of an unknown-length stream
 		return d.seekToEnd(endSample)
 	}
 	landed, err := d.land(landStart, sampleIndex, fs)
 	if err != nil {
-		return 0, err
+		return d.seekFailed(err)
 	}
 	if total := int64(d.info.TotalSamples); total > 0 && landed > total {
 		// A corrupt stream whose frame numbers disagree with the declared STREAMINFO total
@@ -161,6 +169,23 @@ func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 		landed = total
 	}
 	return landed, nil
+}
+
+// seekFailed marks the decoder unusable after a seek failed part-way, and returns the
+// error for SeekToSample to propagate. Every stage past the argument checks (the probes
+// and the landing decode) repositions the shared d.rs cursor, so on failure d.br's
+// buffered bytes and logical position no longer correspond to the source, and d.pending
+// may hold samples from the abandoned position. A caller that treats the seek error as
+// non-fatal and reads on would otherwise resume from the wrong offset and get silently
+// corrupted audio, so the error is made sticky instead: Read and WriteTo both surface
+// d.err before touching the reader. Dropping d.br keeps a stale reader from being used
+// even if some future path skips that gate. The state is recoverable, not terminal: a
+// later successful seek rebuilds d.br and clears d.err in land.
+func (d *Decoder) seekFailed(err error) (int64, error) {
+	d.err = err
+	d.pending = nil
+	d.br = nil
+	return 0, err
 }
 
 // searchFrame returns the byte offset and first sample of the frame containing target.
