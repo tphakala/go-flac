@@ -123,11 +123,13 @@ const maxProbeWindow = 1 << 24 // 16 MiB
 // returns the stream's total sample count (the next read is io.EOF). A negative index
 // returns ErrInvalidSeek; a non-seekable source returns ErrSeekUnsupported.
 //
-// A seek that fails on a source I/O error leaves the decoder in a hard-failed state:
-// the error is sticky, so a subsequent Read or WriteTo returns it rather than resuming
-// from an indeterminate position. Retrying the seek on a healthy source clears it.
-// ErrInvalidSeek and ErrSeekUnsupported are argument and capability errors that touch
-// no state, so they leave the decoder readable.
+// A seek that fails after those two argument checks leaves the decoder in a hard-failed
+// state, whether the failure came from the source (an I/O error while probing) or from
+// the stream itself (a frame that will not decode at the landing offset). The error is
+// sticky, so a subsequent Read or WriteTo returns it rather than resuming from an
+// indeterminate position. Retrying the seek, once the condition that caused it is gone,
+// clears the state. ErrInvalidSeek and ErrSeekUnsupported are argument and capability
+// errors that touch no state, so they leave the decoder readable.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
