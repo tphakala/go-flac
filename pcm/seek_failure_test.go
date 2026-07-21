@@ -71,11 +71,13 @@ func TestSeekIOErrorInvalidatesDecoder(t *testing.T) {
 	// would now happily return bytes decoded from the wrong offset. Only a decoder
 	// that invalidated itself still reports the failure.
 	src.disarm()
-	if n, err := dec.Read(make([]byte, 64)); !errors.Is(err, errSourceIO) {
-		t.Fatalf("Read after a failed seek = (%d, %v), want 0 and errSourceIO", n, err)
+	if n, err := dec.Read(make([]byte, 64)); n != 0 || !errors.Is(err, errSourceIO) {
+		t.Fatalf("Read after a failed seek = (%d, %v), want (0, errSourceIO); a non-zero count "+
+			"would mean audio was served from an indeterminate position", n, err)
 	}
-	if n, err := dec.WriteTo(io.Discard); !errors.Is(err, errSourceIO) {
-		t.Fatalf("WriteTo after a failed seek = (%d, %v), want 0 and errSourceIO", n, err)
+	if n, err := dec.WriteTo(io.Discard); n != 0 || !errors.Is(err, errSourceIO) {
+		t.Fatalf("WriteTo after a failed seek = (%d, %v), want (0, errSourceIO); a non-zero count "+
+			"would mean audio was written from an indeterminate position", n, err)
 	}
 }
 
@@ -104,9 +106,11 @@ func TestFailedSeekNeverSilentlyResumes(t *testing.T) {
 			continue // the seek completed before the failure point; nothing to assert
 		}
 
-		if n, err := dec.Read(make([]byte, 64)); err == nil {
-			t.Errorf("allow=%d: Read after seek error %v returned %d bytes and no error; "+
-				"a failed seek must not leave the decoder silently readable", allow, seekErr, n)
+		if n, err := dec.Read(make([]byte, 64)); n != 0 || !errors.Is(err, errSourceIO) {
+			t.Errorf("allow=%d: Read after seek error %v returned (%d, %v), want (0, errSourceIO); "+
+				"a failed seek must not leave the decoder silently readable, and it must report "+
+				"the failure rather than any number of bytes from an indeterminate position",
+				allow, seekErr, n, err)
 		}
 	}
 }
