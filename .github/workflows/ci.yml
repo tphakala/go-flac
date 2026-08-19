@@ -50,6 +50,17 @@ jobs:
         # the default 10m per-package timeout on CI runners.
         run: go test -race -timeout 20m ./...
 
+      - name: SIMD scalar-fallback parity (Linux)
+        if: runner.os == 'Linux'
+        # The int32 kernels in internal/i32 have a pure-Go fallback for hosts
+        # without AVX2/NEON. GitHub amd64 runners have AVX2, so the default run
+        # above exercises the assembly path; forcing cpu.avx2=off here runs the
+        # same suites on the pure-Go path so both stay proven bit-exact and a
+        # fallback-only host cannot pass while the kernels go untested.
+        env:
+          GODEBUG: cpu.avx2=off
+        run: go test -timeout 20m ./internal/i32/... ./internal/lpc/... ./internal/frame/... ./pcm/...
+
       - name: Rice 32-bit overflow guard (Linux)
         if: runner.os == 'Linux'
         # The Rice cost accumulator must stay correct where int is 32 bits. Pure-Go

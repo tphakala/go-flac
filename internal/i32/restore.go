@@ -11,6 +11,9 @@ package i32
 // where c are the signed binomials (-1)^j*C(K,j). Each function clamps to
 // n = min(len(dst), len(src)), uses int32 wraparound, and writes only into the
 // caller's dst. Inputs of K or fewer samples are all warm-up (copied verbatim).
+// dst and src may be the same slice (exact aliasing): the initial src->dst copy
+// is then a no-op and the cumulative-sum passes touch only dst, so the FLAC
+// decode path can restore a subframe in place. Partial overlap is not supported.
 //
 // Implementation: the order-K fixed predictor is the K-th forward difference, so
 // its inverse is K cumulative-sum passes. Over int32 (the ring Z/2^32) the

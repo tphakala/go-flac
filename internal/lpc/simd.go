@@ -54,3 +54,48 @@ func FixedResidualsDiff(dst, src []int32, order int) {
 func LPCResidualsEncode(dst, src, qcoeff []int32, shift int) {
 	i32.LPCResidualEncode(dst[:len(src)], src, qcoeff, uint(shift))
 }
+
+// RestoreFixed32 reconstructs the int32 subframe dst in place from its fixed-
+// predictor residual of order `order` (1..4), the decode inverse of
+// FixedResidualsDiff and the int32 analogue of RestoreFixed. On input dst holds
+// [warmup | residual]; on output it holds the restored samples.
+//
+// It dispatches to the SIMD i32.Restore kernels (AVX2 on amd64, NEON on arm64,
+// pure Go elsewhere or for short inputs), which reconstruct via cumulative-sum
+// passes that are bit-identical to RestoreFixed's int64-accumulate-then-truncate
+// loop (both reduce mod 2^32). The kernels run safely in place (dst aliases the
+// residual).
+//
+// order must be in [1, 4]. Order 0 (residual == samples) needs no reconstruction
+// and is handled by the caller, so it is rejected here rather than silently
+// copying.
+func RestoreFixed32(dst []int32, order int) {
+	switch order {
+	case 1:
+		i32.Restore1(dst, dst)
+	case 2:
+		i32.Restore2(dst, dst)
+	case 3:
+		i32.Restore3(dst, dst)
+	case 4:
+		i32.Restore4(dst, dst)
+	default:
+		panic("lpc: RestoreFixed32 order out of range [1,4]")
+	}
+}
+
+// RestoreLPC32 reconstructs the int32 subframe dst in place from its quantized-
+// LPC residual of order len(coeffs), the decode inverse of LPCResidualsEncode
+// and the int32 analogue of RestoreLPC. On input dst holds [warmup | residual];
+// on output it holds the restored samples. shift is FLAC's quantization
+// right-shift.
+//
+// It dispatches to the SIMD i32.LPCRestore kernel (AVX2/NEON/pure Go), which
+// accumulates the prediction in int64, arithmetic-shifts the full sum before
+// narrowing to int32, and adds with int32 wraparound, bit-identical to
+// RestoreLPC. The kernel uses the SIMD path only for order 8..32 and falls back
+// to the pure-Go recurrence otherwise; it runs safely in place (dst aliases the
+// residual).
+func RestoreLPC32(dst, coeffs []int32, shift int) {
+	i32.LPCRestore(dst, dst, coeffs, uint(shift))
+}
