@@ -22,6 +22,31 @@ type Frame struct {
 
 	work32 [2][]int32 // reusable stereo-decorrelation scratch (common path)
 	work64 [2][]int64 // reusable scratch for the wide (25-32 bps) int64 decode path
+
+	crc frameCRC // reused per-frame CRC-8/CRC-16 tap state (no per-frame closure)
+}
+
+// frameCRC is the reusable, non-closure CRC tap installed on the bitio.Reader for
+// the duration of one Decode. It folds every consumed frame byte into the frame
+// CRC-16, and additionally into the header CRC-8 while updateC8 is set (the header
+// phase). Because it lives on the reused Frame, installing it (SetTapper(&dst.crc))
+// allocates nothing: a pointer into the already-heap-resident Frame is stored in
+// the Reader's interface field, not boxed.
+type frameCRC struct {
+	c8       uint8
+	c16      uint16
+	updateC8 bool
+}
+
+// reset clears the accumulators and re-enters the header (CRC-8) phase.
+func (fc *frameCRC) reset() { fc.c8, fc.c16, fc.updateC8 = 0, 0, true }
+
+// TapByte folds one consumed byte into the running CRCs.
+func (fc *frameCRC) TapByte(b byte) {
+	fc.c16 = crc.Update16(fc.c16, b)
+	if fc.updateC8 {
+		fc.c8 = crc.Update8(fc.c8, b)
+	}
 }
 
 // header holds the parsed frame header.
@@ -47,14 +72,20 @@ func (h *header) channels() int {
 // Decode decodes exactly one frame from br into dst. dst.Channels is grown/reused
 // to hold the frame's channels at its block size.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
-	var c16 uint16
-	defer br.SetTap(nil)
+	// The CRC tap is a reusable, non-closure ByteTap living on the Frame, so
+	// decoding a frame allocates no tap closure. reset() zeroes the accumulators
+	// and enters the header (CRC-8) phase; SetTapper installs &dst.crc with no
+	// allocation (a pointer into the already-heap-resident Frame).
+	dst.crc.reset()
+	br.SetTapper(&dst.crc)
+	defer br.SetTapper(nil)
 
-	// readHeaderKeepingTap installs a combined CRC-8 (header) + CRC-16 (frame)
-	// tap and verifies the header CRC-8 internally. A clean end of stream surfaces
-	// here as io.EOF (the sync read hit EOF at a frame boundary).
+	// readHeaderBody folds every consumed byte into both CRC-8 and CRC-16 (the
+	// frame CRC-16 covers the header too) and verifies the header CRC-8 internally
+	// against dst.crc.c8. A clean end of stream surfaces here as io.EOF (the sync
+	// read hit EOF at a frame boundary).
 	var hdr header
-	if err := readHeaderKeepingTap(br, si, &hdr, &c16); err != nil {
+	if err := readHeaderBody(br, si, &hdr, &dst.crc.c8); err != nil {
 		return err
 	}
 	// Past the header we are committed to a frame, so an EOF in the body is a
@@ -64,9 +95,11 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 			err = io.ErrUnexpectedEOF
 		}
 	}()
-	// The header CRC-8 is finalized; the frame body only feeds the CRC-16, so
-	// drop the now-unused CRC-8 update from the tap for the rest of the frame.
-	br.SetTap(func(b byte) { c16 = crc.Update16(c16, b) })
+	// The header CRC-8 is finalized; the frame body only feeds the CRC-16. The tap
+	// stays installed continuously (no reseat): at this byte-aligned boundary every
+	// consumed byte including the stored CRC-8 is already tapped, so clearing
+	// updateC8 only stops folding CRC-8 without skipping or double-tapping a byte.
+	dst.crc.updateC8 = false
 
 	nch := hdr.channels()
 	ensureChannels(dst, nch, hdr.blockSize)
@@ -103,7 +136,7 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	if err := br.SkipToByteBoundary(); err != nil {
 		return err
 	}
-	computed := c16
+	computed := dst.crc.c16
 	stored, err := br.ReadBits(16)
 	if err != nil {
 		return err

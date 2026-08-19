@@ -22,19 +22,6 @@ func readHeader(br *bitio.Reader, si flac.StreamInfo, hdr *header) error {
 	return readHeaderBody(br, si, hdr, &c8)
 }
 
-// readHeaderKeepingTap reads the header while also folding every consumed byte
-// into the frame CRC-16 accumulator c16 (the frame CRC-16 covers the header too).
-// The header's own CRC-8 is checked internally. The caller is responsible for
-// clearing the tap when the frame is done.
-func readHeaderKeepingTap(br *bitio.Reader, si flac.StreamInfo, hdr *header, c16 *uint16) error {
-	var c8 uint8
-	br.SetTap(func(b byte) {
-		c8 = crc.Update8(c8, b)
-		*c16 = crc.Update16(*c16, b)
-	})
-	return readHeaderBody(br, si, hdr, &c8)
-}
-
 // readHeaderBody reads the frame header fields and verifies the header CRC-8 using
 // the running value pointed to by c8. The caller installs the tap that maintains
 // c8 (and optionally the frame CRC-16) before calling.

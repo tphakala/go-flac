@@ -33,7 +33,7 @@ type Reader struct {
 	w       int       // valid-byte count in buf (buf[:w] valid)
 	acc     uint64    // bit accumulator, left-aligned: next bit to serve is bit 63
 	nbits   uint      // number of valid bits currently in acc, 0..64
-	tap     func(byte)
+	tap     ByteTap
 	tapCur  int   // buf index of the next byte to hand to tap (consumption cursor)
 	loaded  int64 // cumulative bytes ever shifted from buf into acc (never reset)
 	basePos int64 // absolute byte-offset seed (NewReaderAt); 0 for NewReader
@@ -59,7 +59,7 @@ func NewReaderAt(r io.Reader, pos int64) *Reader {
 // buffer so a caller that processes many short sources (the frame resync scan,
 // which tries decoding at each candidate offset) does not reallocate the 8 KiB
 // block each time. The tap is cleared and basePos reset to 0; reinstall a tap
-// with SetTap if one is needed.
+// with SetTap or SetTapper if one is needed.
 func (r *Reader) Reset(src io.Reader) {
 	buf := r.buf
 	if cap(buf) >= readBlock {
@@ -70,14 +70,40 @@ func (r *Reader) Reset(src io.Reader) {
 	*r = Reader{src: src, buf: buf}
 }
 
-// SetTap registers fn to be called with every fully consumed source byte. It
-// reseats the consumption cursor so only bytes consumed WHILE fn is installed are
-// tapped.
-func (r *Reader) SetTap(fn func(byte)) {
-	if fn != nil {
+// ByteTap receives every fully consumed source byte while installed. It is the
+// non-closure form of the tap: the frame decoder installs a reusable tap whose
+// state lives on the (heap-resident) reused frame, so decoding a frame allocates
+// no per-frame tap closure.
+type ByteTap interface{ TapByte(b byte) }
+
+// TapFunc adapts a plain func(byte) to ByteTap. SetTap wraps its func argument in
+// a TapFunc, so closure-based callers (the standalone header read and the tests,
+// where a one-time closure allocation is fine) reach the tap through the
+// interface. The hot decode path installs a reusable ByteTap via SetTapper instead.
+type TapFunc func(byte)
+
+// TapByte implements ByteTap.
+func (f TapFunc) TapByte(b byte) { f(b) }
+
+// SetTapper registers t to be called with every fully consumed source byte. It
+// reseats the consumption cursor so only bytes consumed WHILE t is installed are
+// tapped. Pass nil to clear the tap.
+func (r *Reader) SetTapper(t ByteTap) {
+	if t != nil {
 		r.tapCur = r.consumedBytes() // next byte to be consumed
 	}
-	r.tap = fn
+	r.tap = t
+}
+
+// SetTap is the func-based form of SetTapper: fn is wrapped in TapFunc, or nil
+// clears the tap. It keeps a nil interface for a nil fn so the hot-path r.tap !=
+// nil gate still bypasses correctly.
+func (r *Reader) SetTap(fn func(byte)) {
+	if fn == nil {
+		r.SetTapper(nil)
+		return
+	}
+	r.SetTapper(TapFunc(fn))
 }
 
 // ByteAligned reports whether the next bit starts a fresh byte. The accumulator
@@ -169,7 +195,7 @@ func (r *Reader) fill() {
 // enough to inline and off the per-sample hot path.
 func (r *Reader) emitTaps(fc int) {
 	for r.tapCur < fc {
-		r.tap(r.buf[r.tapCur])
+		r.tap.TapByte(r.buf[r.tapCur])
 		r.tapCur++
 	}
 }
