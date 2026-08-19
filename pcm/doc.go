@@ -54,4 +54,23 @@
 // returns the first error, so callers do not reimplement the Close finalization:
 //
 //	err := pcm.EncodeInterleaved(f, cfg, pcmBytes)
+//
+// # Reuse and decoding many streams
+//
+// Decoder.Reset rebinds an existing decoder to a new source and parses its header,
+// reusing the decoder's owned buffers (the read buffer, the frame and packed-PCM
+// scratch, and the MD5 hash) instead of allocating them again per stream. A
+// consumer that decodes many streams can pool decoders and pay the setup cost
+// once:
+//
+//	var pool = sync.Pool{New: func() any { return new(pcm.Decoder) }}
+//
+//	dec := pool.Get().(*pcm.Decoder)
+//	defer pool.Put(dec)
+//	if err := dec.Reset(r); err != nil { /* ... */ }
+//	// read PCM from dec until io.EOF.
+//
+// A zero-value Decoder is a valid Reset target, so the pool's New need not call
+// NewDecoder. Reset reuses the large setup buffers but re-parses each stream's
+// header, so it sharply reduces the bytes allocated per stream.
 package pcm

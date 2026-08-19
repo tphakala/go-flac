@@ -50,8 +50,42 @@ var (
 // NewDecoder reads the stream marker and metadata from r, returning a Decoder with
 // Info populated.
 func NewDecoder(r io.Reader) (*Decoder, error) {
+	d := &Decoder{}
+	if err := d.init("NewDecoder", r); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// Reset rebinds the decoder to a new source r and parses its stream header,
+// reusing the decoder's owned buffers (the read buffer, the frame and packed-PCM
+// scratch, and the MD5 hash) instead of allocating them again. It lets a caller
+// that decodes many streams, or pools decoders through a sync.Pool, pay the
+// per-decoder setup cost once rather than per stream; per-frame decoding is
+// already allocation-free. A zero-value Decoder (new(Decoder)) is a valid Reset
+// target, which is the sync.Pool pattern.
+//
+// Reset reads from r's current position and does not reposition it; any read-ahead
+// buffered from a previous source is discarded. Retained buffers keep their
+// high-water size, so a decoder reused across streams of differing shapes holds
+// the largest buffer it has needed. As with NewDecoder, seeking requires r to be
+// an io.Seeker.
+//
+// On success the decoder behaves exactly as a fresh NewDecoder(r) would. If Reset
+// returns an error the decoder must not be used except through another Reset,
+// which fully recovers it; a nil r is rejected before any state changes, so the
+// previous stream stays intact.
+func (d *Decoder) Reset(r io.Reader) error {
+	return d.init("Reset", r)
+}
+
+// init rebinds the decoder to r and parses the stream header. It backs both
+// NewDecoder and Reset; op names the caller in error messages. Every per-stream
+// field is cleared before the header is parsed, so a failed parse leaves no stale
+// stream visible and the decoder stays recoverable by a later init.
+func (d *Decoder) init(op string, r io.Reader) error {
 	if r == nil {
-		return nil, errors.New("go-flac/pcm: NewDecoder: nil reader")
+		return fmt.Errorf("go-flac/pcm: %s: nil reader", op)
 	}
 	rs, seekable := r.(io.ReadSeeker)
 	var base int64
@@ -65,19 +99,48 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 			base = b
 		}
 	}
-	br := bitio.NewReader(r)
-	sm, err := meta.ReadMetadata(br)
+
+	// Reuse the owned 8 KiB read buffer and the MD5 hash across streams. Both are
+	// nil on a zero-value (pooled) decoder, and br is nil after a failed seek
+	// (seekFailed), so fall back to construction in those cases.
+	if d.br == nil {
+		d.br = bitio.NewReader(r)
+	} else {
+		d.br.Reset(r)
+	}
+	if d.md5 == nil {
+		d.md5 = md5.New()
+	} else {
+		d.md5.Reset()
+	}
+
+	// Clear every per-stream field before parsing so nothing from a previous stream
+	// (or a partially parsed failed one) can leak into this decode. The reused
+	// buffers (frame, probeFrame, probeBuf, resyncR, buf) carry no cross-stream
+	// meaning: each is fully rewritten before it is read.
+	d.info = flac.StreamInfo{}
+	d.bytesPS = 0
+	d.pending = nil
+	d.decoded = 0
+	d.seeked = false
+	d.done = false
+	d.err = nil
+	d.rs = nil
+	d.seekable = false
+	d.audioStart = 0
+	d.streamEnd = 0
+	d.nominalBlock = 0
+	d.maxFrame = 0
+	d.seekPoints = nil
+
+	sm, err := meta.ReadMetadata(d.br)
 	if err != nil {
-		return nil, err
+		d.err = err // poisoned, but a later Reset clears this and recovers the decoder
+		return err
 	}
-	d := &Decoder{
-		br:      br,
-		info:    sm.Info,
-		bytesPS: (sm.Info.BitDepth + 7) / 8,
-		md5:     md5.New(),
-	}
+
 	if seekable {
-		audioStart := base + br.BytesRead()
+		audioStart := base + d.br.BytesRead()
 		resume, serr := rs.Seek(0, io.SeekCurrent) // read-ahead-advanced absolute file pos
 		var streamEnd int64
 		if serr == nil {
@@ -87,7 +150,8 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 			if _, rerr := rs.Seek(resume, io.SeekStart); rerr != nil { // restore; owned read-ahead buffer stays valid
 				// The cursor was advanced to EOF to measure length but cannot be restored,
 				// so the reader can no longer forward-decode: surface this as a hard error.
-				return nil, rerr
+				d.err = rerr
+				return rerr
 			}
 			d.rs = rs
 			d.seekable = true
@@ -99,10 +163,15 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 		}
 		// If serr != nil the source advertises io.Seeker but cannot be measured (no
 		// SeekEnd support, etc.). The failed SeekCurrent/SeekEnd leaves the read cursor
-		// in place, so the decoder degrades to forward-only (d.seekable stays false)
+		// in place, so the decoder degrades to forward-only (seekable stays false)
 		// rather than failing construction.
 	}
-	return d, nil
+	// Commit the stream's identity only once init has fully succeeded, so any failed
+	// init (a bad header, or the seek-restore failure above) leaves Info() zero,
+	// matching the poisoned-decoder contract uniformly across every failure path.
+	d.info = sm.Info
+	d.bytesPS = (sm.Info.BitDepth + 7) / 8
+	return nil
 }
 
 // Info returns the stream's STREAMINFO-derived properties.
