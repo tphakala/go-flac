@@ -111,3 +111,110 @@ func TestLPCResidualsEncodeParity(t *testing.T) {
 		}
 	}
 }
+
+// TestRestoreFixed32Parity proves the in-place SIMD RestoreFixed32 reconstructs a
+// subframe bit-identically to the scalar RestoreFixed (the int64-accumulate loop)
+// for every input, across orders 1..4, lengths straddling the SIMD block sizes
+// including all-warmup short inputs, and magnitudes spanning the full int32 range.
+func TestRestoreFixed32Parity(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7ac1))
+	lengths := []int{1, 2, 3, 4, 5, 8, 9, 16, 33, 256, 4096}
+	kinds := []struct {
+		name string
+		gen  func() int32
+	}{
+		{"quiet", func() int32 { return int32(rng.Intn(7) - 3) }},
+		{"mid", func() int32 { return int32(rng.Intn(1<<17)) - (1 << 16) }},
+		{"full", func() int32 { return int32(rng.Uint32()) }},
+	}
+	for _, n := range lengths {
+		for _, kind := range kinds {
+			// buf represents a decoded subframe: [warmup | residual], arbitrary.
+			buf := make([]int32, n)
+			for i := range buf {
+				buf[i] = kind.gen()
+			}
+			buf[0] = -2147483648
+			if n > 1 {
+				buf[1] = 2147483647
+			}
+			if n > 2 {
+				buf[2] = -1
+			}
+			for order := 1; order <= 4; order++ {
+				want := make([]int32, n)
+				copy(want, buf)
+				RestoreFixed(want, order) // scalar, in place
+
+				got := make([]int32, n)
+				copy(got, buf)
+				RestoreFixed32(got, order) // SIMD, in place
+
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("n=%d %s order=%d: RestoreFixed32[%d]=%d, want %d",
+							n, kind.name, order, i, got[i], want[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestRestoreLPC32Parity proves the in-place SIMD RestoreLPC32 reconstructs a
+// subframe bit-identically to the scalar RestoreLPC (int64 accumulate, arithmetic
+// >>shift of the full sum, int32-truncated wraparound add) for every input,
+// across orders 1..32 (straddling the SIMD gate at 8), the shift range FLAC
+// emits, lengths at and beyond the order, and full-range magnitudes.
+func TestRestoreLPC32Parity(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x2f5e))
+	orders := []int{1, 2, 4, 7, 8, 9, 12, 16, 31, 32}
+	lengths := []int{1, 2, 5, 8, 9, 16, 33, 64, 256, 4096}
+	shifts := []int{0, 1, 9, 14, 15}
+	for _, order := range orders {
+		coeffs := make([]int32, order)
+		for j := range coeffs {
+			coeffs[j] = int32(rng.Intn(1<<15) - (1 << 14)) // 15-bit signed qlp coeffs
+		}
+		for _, n := range lengths {
+			buf := make([]int32, n)
+			for i := range buf {
+				buf[i] = int32(rng.Uint32())
+			}
+			if n > 2 {
+				buf[0], buf[1], buf[2] = -2147483648, 2147483647, -1
+			}
+			for _, shift := range shifts {
+				want := make([]int32, n)
+				copy(want, buf)
+				RestoreLPC(want, coeffs, shift, order) // scalar, in place
+
+				got := make([]int32, n)
+				copy(got, buf)
+				RestoreLPC32(got, coeffs, shift) // SIMD, in place
+
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("order=%d n=%d shift=%d: RestoreLPC32[%d]=%d, want %d",
+							order, n, shift, i, got[i], want[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestRestoreFixed32PanicsOutOfRange documents that RestoreFixed32 rejects orders
+// outside [1,4]; order 0 is a no-op handled by the caller, not this function.
+func TestRestoreFixed32PanicsOutOfRange(t *testing.T) {
+	for _, order := range []int{0, 5} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("order=%d: expected panic, got none", order)
+				}
+			}()
+			RestoreFixed32(make([]int32, 8), order)
+		}()
+	}
+}
