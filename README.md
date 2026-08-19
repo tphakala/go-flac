@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/tphakala/go-flac/actions/workflows/ci.yml/badge.svg)](https://github.com/tphakala/go-flac/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/tphakala/go-flac.svg)](https://pkg.go.dev/github.com/tphakala/go-flac)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tphakala/go-flac)](https://goreportcard.com/report/github.com/tphakala/go-flac)
 [![codecov](https://codecov.io/gh/tphakala/go-flac/branch/main/graph/badge.svg)](https://codecov.io/gh/tphakala/go-flac)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/tphakala/go-flac)](go.mod)
 [![Latest tag](https://img.shields.io/github/v/tag/tphakala/go-flac?sort=semver&label=release)](https://github.com/tphakala/go-flac/tags)
