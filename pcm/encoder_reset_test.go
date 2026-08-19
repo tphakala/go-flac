@@ -254,3 +254,31 @@ func TestEncoderResetValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestEncoderResetReleasesOversizedSeekTable covers the pooled-reuse retention fix
+// from issue #9. A large SeekTableMaxPoints reserves a big seek-point backing array
+// up front; resetting the encoder to a seek-table-free stream must release that
+// array rather than pin it for the pooled encoder's lifetime. The common default
+// (cap == defaultSeekMaxPoints) is kept, so only genuinely oversized arrays are
+// freed; the grow path reallocates on demand for a later large stream.
+func TestEncoderResetReleasesOversizedSeekTable(t *testing.T) {
+	big := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5,
+		SeekTableInterval: 4096, SeekTableMaxPoints: defaultSeekMaxPoints * 4}
+	plain := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5}
+
+	enc, err := NewEncoder(&seekBuffer{}, big)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	if cap(enc.points) <= defaultSeekMaxPoints {
+		t.Fatalf("setup: expected an oversized points reservation, got cap=%d", cap(enc.points))
+	}
+
+	if err := enc.Reset(&seekBuffer{}, plain); err != nil {
+		t.Fatalf("Reset(plain): %v", err)
+	}
+	if cap(enc.points) > defaultSeekMaxPoints {
+		t.Fatalf("Reset retained oversized seek-point array: cap=%d, want <= %d",
+			cap(enc.points), defaultSeekMaxPoints)
+	}
+}

@@ -225,8 +225,13 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 		e.md5.Reset()
 	}
 
-	// Reset every per-stream field. carry/leftover/points keep their backing arrays
-	// (truncated to zero length) so a reused encoder stays allocation-free.
+	// Reset every per-stream field. carry/leftover keep their backing arrays
+	// (truncated to zero length) so a reused encoder stays allocation-free. points
+	// keeps its array too, except an oversized one (a large seek table from a prior
+	// stream) is released so a pooled encoder does not pin up to ~16.7 MB after
+	// switching to a small or seek-table-free stream. defaultSeekMaxPoints is the
+	// retention ceiling; the reservation below reallocates on demand for a
+	// genuinely large stream.
 	e.carry = e.carry[:0]
 	e.leftover = e.leftover[:0]
 	e.frameNum = 0
@@ -239,6 +244,9 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 	e.seekMaxPoints = 0
 	e.seekBodyOff = 0
 	e.nextBoundary = 0
+	if cap(e.points) > defaultSeekMaxPoints {
+		e.points = nil // drop an oversized seek-point array instead of pinning it
+	}
 	e.points = e.points[:0]
 
 	if cfg.SeekTableInterval > 0 {
