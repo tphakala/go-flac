@@ -2,6 +2,7 @@ package lpc
 
 import (
 	"math/rand"
+	"strings"
 	"testing"
 )
 
@@ -205,13 +206,18 @@ func TestRestoreLPC32Parity(t *testing.T) {
 }
 
 // TestRestoreFixed32PanicsOutOfRange documents that RestoreFixed32 rejects orders
-// outside [1,4]; order 0 is a no-op handled by the caller, not this function.
+// outside [1,4] with its range-check panic (not some incidental panic); order 0
+// is a no-op handled by the caller, not this function.
 func TestRestoreFixed32PanicsOutOfRange(t *testing.T) {
 	for _, order := range []int{0, 5} {
 		func() {
 			defer func() {
-				if recover() == nil {
+				r := recover()
+				if r == nil {
 					t.Fatalf("order=%d: expected panic, got none", order)
+				}
+				if msg, _ := r.(string); !strings.Contains(msg, "out of range") {
+					t.Fatalf("order=%d: panic %v, want the order-out-of-range message", order, r)
 				}
 			}()
 			RestoreFixed32(make([]int32, 8), order)

@@ -239,7 +239,10 @@ func fixedAbsSumsGo(src []int32, sums *[5]uint64) {
 //
 // Each out[i] depends on the order previously reconstructed outputs, so unlike
 // the encode FIR this cannot be vectorized across i. out and residual are the
-// caller-clamped equal-length slices; out must not alias residual.
+// caller-clamped equal-length slices and may be the same slice (exact aliasing,
+// which the in-place decode path relies on): out[i] is written only after
+// residual[i] is read at step i, and the recurrence otherwise reads only
+// already-written outputs. Partial overlap is not supported.
 func lpcRestoreGo(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
 	w := min(order, len(out))
