@@ -138,8 +138,6 @@ func (d *Decoder) init(op string, r io.Reader) error {
 		d.err = err // poisoned, but a later Reset clears this and recovers the decoder
 		return err
 	}
-	d.info = sm.Info
-	d.bytesPS = (sm.Info.BitDepth + 7) / 8
 
 	if seekable {
 		audioStart := base + d.br.BytesRead()
@@ -168,6 +166,11 @@ func (d *Decoder) init(op string, r io.Reader) error {
 		// in place, so the decoder degrades to forward-only (seekable stays false)
 		// rather than failing construction.
 	}
+	// Commit the stream's identity only once init has fully succeeded, so any failed
+	// init (a bad header, or the seek-restore failure above) leaves Info() zero,
+	// matching the poisoned-decoder contract uniformly across every failure path.
+	d.info = sm.Info
+	d.bytesPS = (sm.Info.BitDepth + 7) / 8
 	return nil
 }
 

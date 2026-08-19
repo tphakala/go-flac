@@ -54,12 +54,14 @@ var resetShapes = map[string]Config{
 	"eight16":  {SampleRate: 44100, BitDepth: 16, Channels: 8, CompressionLevel: 3},
 }
 
+var resetShapeNames = []string{"stereo16", "mono24", "eight16"}
+
 // TestDecoderResetMatchesFresh is the core equivalence guard: after decoding one
 // stream, Reset to another must produce output and Info() byte-identical to a
 // fresh NewDecoder on that stream, for every ordered pair of shapes (exercising
 // buffer growth and shrink) and both seekable and non-seekable sources.
 func TestDecoderResetMatchesFresh(t *testing.T) {
-	names := []string{"stereo16", "mono24", "eight16"}
+	names := resetShapeNames
 	streams := make(map[string][]byte, len(names))
 	for _, n := range names {
 		streams[n] = makeStream(t, resetShapes[n], 9000) // ~2-3 frames at block 4096
@@ -275,18 +277,28 @@ func TestDecoderResetAfterFailedSeek(t *testing.T) {
 }
 
 func TestDecoderResetNilReader(t *testing.T) {
-	stream := makeStream(t, resetShapes["stereo16"], 9000)
+	stream := makeStream(t, resetShapes["stereo16"], 12000)
+	_, full := decodeAll(t, bytes.NewReader(stream))
+
 	d, err := NewDecoder(bytes.NewReader(stream))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
+	// Decode part of the stream, then a rejected Reset(nil) must not disturb it: a
+	// nil reader is rejected before any state changes, so continuing the SAME
+	// decoder must still yield the rest of the original stream.
+	var got bytes.Buffer
+	if _, err := io.CopyN(&got, d, 4096); err != nil {
+		t.Fatalf("partial decode: %v", err)
+	}
 	if err := d.Reset(nil); err == nil {
 		t.Fatal("Reset(nil): want error, got nil")
 	}
-	// A nil reader is rejected before any state changes, so a following Reset onto a
-	// good stream works.
-	if err := d.Reset(bytes.NewReader(stream)); err != nil {
-		t.Fatalf("Reset after nil: %v", err)
+	if _, err := io.Copy(&got, d); err != nil {
+		t.Fatalf("continue decode after Reset(nil): %v", err)
+	}
+	if !bytes.Equal(got.Bytes(), full) {
+		t.Fatalf("Reset(nil) disturbed the in-progress stream: got %d bytes, want %d", got.Len(), len(full))
 	}
 }
 
@@ -331,16 +343,27 @@ func TestDecodeResetReuseAllocs(t *testing.T) {
 // the -race build validates that a pooled, Reset-reused decoder carries no shared
 // state across goroutines.
 func TestDecoderPoolSmoke(t *testing.T) {
-	stream := makeStream(t, resetShapes["stereo16"], 9000)
-	_, want := decodeAll(t, bytes.NewReader(stream))
+	// Each goroutine drives a DIFFERENT shape through the shared pool and compares
+	// against its own expected output, so a decoder that carried a stale oversized
+	// buffer from a previous, larger stream would diverge from the byte-exact want,
+	// not just trip the race detector.
+	names := resetShapeNames
+	type shapeCase struct{ stream, want []byte }
+	cases := make([]shapeCase, len(names))
+	for i, n := range names {
+		s := makeStream(t, resetShapes[n], 9000)
+		_, w := decodeAll(t, bytes.NewReader(s))
+		cases[i] = shapeCase{s, w}
+	}
 
 	pool := sync.Pool{New: func() any { return new(Decoder) }}
 	var wg sync.WaitGroup
-	for range 8 {
+	for g := range 8 {
+		c := cases[g%len(cases)]
 		wg.Go(func() {
 			for range 10 {
 				d := pool.Get().(*Decoder)
-				if err := d.Reset(bytes.NewReader(stream)); err != nil {
+				if err := d.Reset(bytes.NewReader(c.stream)); err != nil {
 					t.Errorf("pooled Reset: %v", err)
 					pool.Put(d)
 					return
@@ -351,14 +374,62 @@ func TestDecoderPoolSmoke(t *testing.T) {
 					pool.Put(d)
 					return
 				}
-				if !bytes.Equal(got.Bytes(), want) {
-					t.Errorf("pooled decode mismatch: %d vs %d bytes", got.Len(), len(want))
+				if !bytes.Equal(got.Bytes(), c.want) {
+					t.Errorf("pooled decode mismatch: %d vs %d bytes", got.Len(), len(c.want))
 				}
 				pool.Put(d)
 			}
 		})
 	}
 	wg.Wait()
+}
+
+// restoreFailSeeker is an io.ReadSeeker whose SeekStart always fails while
+// SeekCurrent and SeekEnd succeed, which drives the decoder's seek-restore-failure
+// path: the length probe seeks to end, then cannot restore the read position.
+type restoreFailSeeker struct{ r *bytes.Reader }
+
+func (s restoreFailSeeker) Read(p []byte) (int, error) { return s.r.Read(p) }
+
+func (s restoreFailSeeker) Seek(off int64, whence int) (int64, error) {
+	if whence == io.SeekStart {
+		return 0, errors.New("seek-restore failed")
+	}
+	return s.r.Seek(off, whence)
+}
+
+// TestDecoderResetSeekRestoreFailurePoison covers the other failure path into the
+// poisoned state (the seek-restore failure, distinct from a bad header): Reset must
+// return that error, poison the decoder (Read returns the sticky error and Info()
+// is zero, uniformly with the metadata-failure path), and recover on the next good
+// Reset.
+func TestDecoderResetSeekRestoreFailurePoison(t *testing.T) {
+	good := makeStream(t, resetShapes["stereo16"], 9000)
+	d, err := NewDecoder(bytes.NewReader(good))
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, d); err != nil {
+		t.Fatalf("decode good: %v", err)
+	}
+
+	rerr := d.Reset(restoreFailSeeker{bytes.NewReader(good)})
+	if rerr == nil {
+		t.Fatal("Reset with failing restore-seek: want error, got nil")
+	}
+	if _, err := d.Read(make([]byte, 16)); !errors.Is(err, rerr) {
+		t.Fatalf("Read after seek-restore-failed Reset: err = %v, want the sticky error %v", err, rerr)
+	}
+	if info := d.Info(); info != (flac.StreamInfo{}) {
+		t.Fatalf("Info() after seek-restore-failed Reset = %+v, want zero", info)
+	}
+
+	if err := d.Reset(bytes.NewReader(good)); err != nil {
+		t.Fatalf("recovery Reset: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, d); err != nil {
+		t.Fatalf("decode after recovery: %v", err)
+	}
 }
 
 func mustDecoder(t *testing.T, r io.Reader) *Decoder {
