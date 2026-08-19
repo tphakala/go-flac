@@ -59,7 +59,7 @@ func NewReaderAt(r io.Reader, pos int64) *Reader {
 // buffer so a caller that processes many short sources (the frame resync scan,
 // which tries decoding at each candidate offset) does not reallocate the 8 KiB
 // block each time. The tap is cleared and basePos reset to 0; reinstall a tap
-// with SetTap if one is needed.
+// with SetTap or SetTapper if one is needed.
 func (r *Reader) Reset(src io.Reader) {
 	buf := r.buf
 	if cap(buf) >= readBlock {
@@ -76,9 +76,10 @@ func (r *Reader) Reset(src io.Reader) {
 // no per-frame tap closure.
 type ByteTap interface{ TapByte(b byte) }
 
-// TapFunc adapts a plain func(byte) to ByteTap for callers where a one-time
-// closure allocation is fine: the standalone header read and the tests. The hot
-// decode path uses SetTapper with a reusable ByteTap instead.
+// TapFunc adapts a plain func(byte) to ByteTap. SetTap wraps its func argument in
+// a TapFunc, so closure-based callers (the standalone header read and the tests,
+// where a one-time closure allocation is fine) reach the tap through the
+// interface. The hot decode path installs a reusable ByteTap via SetTapper instead.
 type TapFunc func(byte)
 
 // TapByte implements ByteTap.

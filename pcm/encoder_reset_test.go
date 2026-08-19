@@ -282,3 +282,31 @@ func TestEncoderResetReleasesOversizedSeekTable(t *testing.T) {
 			cap(enc.points), defaultSeekMaxPoints)
 	}
 }
+
+// TestEncoderResetRetainsCeilingSeekTableCap is the non-regression companion to
+// TestEncoderResetReleasesOversizedSeekTable: a points array reserved exactly at
+// the retention ceiling must be KEPT across reset so pooled reuse stays
+// allocation-free. It guards the strict '>' boundary in init: widening it to '>='
+// would nil and reallocate the ceiling-sized array on every reset, a perf
+// regression the byte-identical seek-table reset tests would not catch.
+func TestEncoderResetRetainsCeilingSeekTableCap(t *testing.T) {
+	atCeiling := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5,
+		SeekTableInterval: 4096, SeekTableMaxPoints: defaultSeekMaxPoints}
+	plain := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5}
+
+	enc, err := NewEncoder(&seekBuffer{}, atCeiling)
+	if err != nil {
+		t.Fatalf("NewEncoder: %v", err)
+	}
+	if cap(enc.points) != defaultSeekMaxPoints {
+		t.Fatalf("setup: expected points cap == defaultSeekMaxPoints (%d), got %d", defaultSeekMaxPoints, cap(enc.points))
+	}
+
+	if err := enc.Reset(&seekBuffer{}, plain); err != nil {
+		t.Fatalf("Reset(plain): %v", err)
+	}
+	if cap(enc.points) != defaultSeekMaxPoints {
+		t.Fatalf("Reset released a ceiling-sized seek-point array (cap=%d); the retention ceiling must be kept, want cap==%d",
+			cap(enc.points), defaultSeekMaxPoints)
+	}
+}
