@@ -15,8 +15,12 @@ package i32
 // accumulated in int64 so it does not overflow for FLAC's coefficient precision
 // and order; only the final shifted prediction is truncated to int32. Each
 // function clamps to n = min of its two slice lengths, writes only into the
-// caller's destination, and uses int32 wraparound. The destination must not
-// alias the source.
+// caller's destination, and uses int32 wraparound. LPCResidualEncode's
+// destination must not alias its source (the FIR reads a forward window of the
+// source while writing). LPCRestore, being the serial recurrence, may be called
+// fully in place with out and residual the same slice (exact aliasing): it reads
+// residual[i] before storing out[i] at that index and otherwise reads only
+// already-written outputs. Partial overlap remains unsupported.
 //
 // LPCResidualEncode is a FIR that vectorizes across output samples; LPCRestore
 // is a serial recurrence (each output feeds the next prediction) and so is far
@@ -73,6 +77,10 @@ func LPCResidualEncode(res, samples, coeffs []int32, shift uint) {
 // leaves any trailing capacity in out untouched. Given the same coeffs and shift,
 // LPCRestore(LPCResidualEncode(samples)) == samples. shift is clamped to 63, as
 // in LPCResidualEncode, so encode and decode stay matched across all paths.
+//
+// out and residual may be the same slice (exact aliasing), which the FLAC decode
+// path relies on to reconstruct a subframe in place; partial overlap is not
+// supported.
 func LPCRestore(out, residual, coeffs []int32, shift uint) {
 	n := min(len(out), len(residual))
 	if n == 0 {
