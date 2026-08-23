@@ -152,3 +152,34 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  fuzz:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # A short bounded run of each decode-path fuzz target on every build. The
+      # decoder and metadata reader parse untrusted bytes, so this guards
+      # against panics and unbounded allocation on malformed input; a crash a
+      # run finds is committed under testdata/fuzz as a regression seed. The
+      # last target fuzzes an integer kernel against its scalar reference.
+      # Smoke runs, not a substitute for a long local fuzz session.
+      - name: Fuzz frame decode
+        run: go test -run='^$' -fuzz='^FuzzDecode$' -fuzztime=20s ./internal/frame
+      - name: Fuzz metadata reader
+        run: go test -run='^$' -fuzz='^FuzzReadMetadata$' -fuzztime=15s ./internal/meta
+      - name: Fuzz bit reader
+        run: go test -run='^$' -fuzz='^FuzzReaderOracle$' -fuzztime=15s ./internal/bitio
+      - name: Fuzz seek
+        run: go test -run='^$' -fuzz='^FuzzSeek$' -fuzztime=15s ./pcm
+      - name: Fuzz encode/decode round trip
+        run: go test -run='^$' -fuzz='^FuzzEncodeRoundTrip$' -fuzztime=15s ./pcm
+      - name: Fuzz LPC integer kernel
+        run: go test -run='^$' -fuzz='^FuzzI32LPC$' -fuzztime=15s ./internal/i32
