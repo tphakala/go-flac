@@ -19,6 +19,13 @@ The integer kernels live in-tree under internal/i32; the
 feature detection, LPC autocorrelation, and CRC-16, and brings one transitive
 dependency, golang.org/x/sys.
 
+It is the FLAC member of a family of pure-Go audio libraries that also covers
+[WAV](https://github.com/tphakala/go-wav),
+[Opus](https://github.com/tphakala/go-opus),
+[AAC](https://github.com/tphakala/go-aac) and
+[M4A](https://github.com/tphakala/go-m4a), and it presents the same API shape as
+its siblings, so a program that already speaks one of them speaks this one too.
+
 ## Install
 
 ```bash
@@ -206,14 +213,11 @@ reproduce them on your own machine.
 
 ## Sponsor
 
-go-flac is free and MIT-licensed, maintained in my own time. If it is useful to
-you or your project, you can support continued maintenance through GitHub
-Sponsors:
+go-flac is maintained in my own time. If it is useful to you or your project, you
+can support continued maintenance through GitHub Sponsors; sponsorship is
+entirely optional and never gates any feature.
 
 [![Sponsor on GitHub](https://img.shields.io/github/sponsors/tphakala?logo=githubsponsors&color=ea4aaa&label=Sponsor%20%40tphakala)](https://github.com/sponsors/tphakala)
-
-Sponsorship is entirely optional and never gates any feature; the whole library
-stays MIT-licensed regardless.
 
 ## License
 
