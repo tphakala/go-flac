@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/tphakala/go-flac"
 )
 
 // encodeFLAC returns a complete FLAC stream for the given PCM and config, using
@@ -72,14 +74,42 @@ func TestDecodeInterleavedLimit(t *testing.T) {
 	})
 
 	t.Run("non-positive is unbounded", func(t *testing.T) {
-		got, _, err := DecodeInterleavedLimit(bytes.NewReader(stream), 0)
-		if err != nil {
-			t.Fatalf("DecodeInterleavedLimit(0): %v", err)
-		}
-		if !bytes.Equal(got, pcmBytes) {
-			t.Fatalf("unbounded decode mismatch: got %d bytes, want %d", len(got), full)
+		for _, limit := range []int{0, -1} {
+			got, _, err := DecodeInterleavedLimit(bytes.NewReader(stream), limit)
+			if err != nil {
+				t.Fatalf("DecodeInterleavedLimit(%d): %v", limit, err)
+			}
+			if !bytes.Equal(got, pcmBytes) {
+				t.Fatalf("unbounded decode mismatch (limit %d): got %d bytes, want %d", limit, len(got), full)
+			}
 		}
 	})
+}
+
+// TestPresizeHint checks the up-front reservation is bounded: a declared length is
+// never trusted past maxPreSize or the ceiling, and the ceil bytes-per-sample is
+// used. This is the guard against a tiny file that declares a huge sample count
+// driving a large allocation before any frame is decoded.
+func TestPresizeHint(t *testing.T) {
+	cases := []struct {
+		name     string
+		info     flac.StreamInfo
+		maxBytes int
+		want     int
+	}{
+		{"huge declared total is capped", flac.StreamInfo{TotalSamples: 1 << 34, Channels: 2, BitDepth: 16}, DefaultMaxDecodedBytes, maxPreSize},
+		{"modest total reserved in full", flac.StreamInfo{TotalSamples: 44100, Channels: 2, BitDepth: 16}, DefaultMaxDecodedBytes, 44100 * 2 * 2},
+		{"unknown total skips presize", flac.StreamInfo{TotalSamples: 0, Channels: 2, BitDepth: 16}, DefaultMaxDecodedBytes, 0},
+		{"ceiling below cap bounds hint", flac.StreamInfo{TotalSamples: 1 << 20, Channels: 2, BitDepth: 16}, 1024, 1024},
+		{"non-byte-aligned depth uses ceil", flac.StreamInfo{TotalSamples: 100, Channels: 1, BitDepth: 20}, DefaultMaxDecodedBytes, 100 * 3},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := presizeHint(c.info, c.maxBytes); got != c.want {
+				t.Errorf("presizeHint(%+v, %d) = %d, want %d", c.info, c.maxBytes, got, c.want)
+			}
+		})
+	}
 }
 
 // TestDecodeInterleavedBadStream checks a non-FLAC input is reported (not as a

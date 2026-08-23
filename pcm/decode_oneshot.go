@@ -53,17 +53,11 @@ func DecodeInterleavedLimit(r io.Reader, maxBytes int) ([]byte, flac.StreamInfo,
 	info := d.Info()
 
 	var buf bytes.Buffer
-	// Pre-size from the declared length when it is known and fits under the
-	// ceiling, so the common case allocates once instead of growing by doubling.
-	// The guard keeps a file that declares an implausible length from driving the
-	// reservation: the hint is only taken when it is within maxBytes, and the cap
-	// below still enforces the ceiling against the bytes actually produced.
-	if info.TotalSamples > 0 && info.Channels > 0 && info.BitDepth > 0 {
-		if hint := int64(info.TotalSamples) * int64(info.Channels) * int64(info.BitDepth/8); hint > 0 {
-			if maxBytes > 0 && hint <= int64(maxBytes) {
-				buf.Grow(int(hint))
-			}
-		}
+	// Pre-size from the declared length so the common case allocates once instead
+	// of growing by doubling. presizeHint bounds the reservation; see there for why
+	// the declared count is not trusted directly.
+	if n := presizeHint(info, maxBytes); n > 0 {
+		buf.Grow(n)
 	}
 
 	cw := &cappedWriter{buf: &buf, max: maxBytes}
@@ -71,6 +65,40 @@ func DecodeInterleavedLimit(r io.Reader, maxBytes int) ([]byte, flac.StreamInfo,
 		return nil, info, err
 	}
 	return buf.Bytes(), info, nil
+}
+
+// maxPreSize caps the up-front buffer reservation the one-shot makes from the
+// STREAMINFO-declared sample count. That count is read from the header and is not
+// verified against the actual stream length, so without a cap a tiny crafted file
+// declaring a huge total would drive a reservation of up to the whole ceiling (a
+// gibibyte by default) before a single frame is decoded, which is the very
+// small-input-large-allocation hazard DefaultMaxDecodedBytes exists to stop. The
+// cappedWriter still enforces the real ceiling on the bytes actually produced, so
+// this only bounds the initial guess: a genuinely large stream grows past it by
+// doubling.
+const maxPreSize = 32 << 20 // 32 MiB
+
+// presizeHint returns how many bytes to reserve up front for a decode of the given
+// stream, or 0 to skip pre-sizing. It uses the ceil bytes-per-sample the decoder
+// actually emits, and is bounded by maxPreSize and, when a positive ceiling is
+// set, by maxBytes, so a declared length can never drive the reservation past
+// those.
+func presizeHint(info flac.StreamInfo, maxBytes int) int {
+	if info.TotalSamples == 0 || info.Channels <= 0 || info.BitDepth <= 0 {
+		return 0
+	}
+	bytesPerSample := (info.BitDepth + 7) / 8
+	hint := int64(info.TotalSamples) * int64(info.Channels) * int64(bytesPerSample)
+	if hint <= 0 { // zero, or a wrapped-negative from an implausible declared total
+		return 0
+	}
+	if hint > maxPreSize {
+		hint = maxPreSize
+	}
+	if maxBytes > 0 && hint > int64(maxBytes) {
+		hint = int64(maxBytes)
+	}
+	return int(hint)
 }
 
 // cappedWriter accumulates into buf and refuses a write that would carry the
