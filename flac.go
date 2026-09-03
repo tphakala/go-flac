@@ -38,3 +38,13 @@ type StreamInfo struct {
 	TotalSamples uint64   // inter-channel sample count; 0 if unknown
 	MD5          [16]byte // MD5 of the unencoded audio; all-zero if absent
 }
+
+// Tag is one VORBIS_COMMENT field: a case-insensitive field name and its UTF-8
+// value, carried in the stream as "NAME=value". Tags are an ordered list rather
+// than a map because the FLAC/Vorbis comment format preserves order and permits
+// repeated field names (for example several ARTIST fields). Name must be ASCII in
+// the range 0x20..0x7D excluding '=' (0x3D); Value is arbitrary UTF-8 text.
+type Tag struct {
+	Name  string
+	Value string
+}

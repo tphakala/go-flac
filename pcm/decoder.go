@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strings"
 
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
@@ -27,6 +28,8 @@ type Decoder struct {
 	nominalBlock int              // STREAMINFO max block size; fixed-blocksize nominal
 	maxFrame     int              // STREAMINFO max frame size (0 unknown), seek-probe sizing
 	seekPoints   []meta.SeekPoint // parsed SEEKTABLE points (nil when absent); narrows seeks
+	vendor       string           // VORBIS_COMMENT vendor string ("" when absent)
+	comments     []string         // VORBIS_COMMENT "NAME=value" fields (nil when absent)
 
 	frame      frame.Frame
 	probeFrame frame.Frame  // scratch frame decoded by seek probes
@@ -132,6 +135,8 @@ func (d *Decoder) init(op string, r io.Reader) error {
 	d.nominalBlock = 0
 	d.maxFrame = 0
 	d.seekPoints = nil
+	d.vendor = ""
+	d.comments = nil
 
 	sm, err := meta.ReadMetadata(d.br)
 	if err != nil {
@@ -171,11 +176,38 @@ func (d *Decoder) init(op string, r io.Reader) error {
 	// matching the poisoned-decoder contract uniformly across every failure path.
 	d.info = sm.Info
 	d.bytesPS = (sm.Info.BitDepth + 7) / 8
+	// Tags are recovered regardless of seekability; they are absent (empty) unless the
+	// stream carried a VORBIS_COMMENT block.
+	d.vendor = sm.Vendor
+	d.comments = sm.Comments
 	return nil
 }
 
 // Info returns the stream's STREAMINFO-derived properties.
 func (d *Decoder) Info() flac.StreamInfo { return d.info }
+
+// Vendor returns the VORBIS_COMMENT vendor string. It is "" both when the stream
+// carried no VORBIS_COMMENT block and when the block declared an empty vendor string,
+// so "" alone does not distinguish the two.
+func (d *Decoder) Vendor() string { return d.vendor }
+
+// Tags returns the stream's VORBIS_COMMENT fields as ordered flac.Tag values, each
+// split at the first '=' of its "NAME=value" comment. It returns nil both when the
+// stream carried no VORBIS_COMMENT block and when the block carried no comment fields
+// (a vendor-only block), so nil alone does not distinguish the two. A comment with no
+// '=' yields a Tag whose Name is the whole string and whose Value is empty. Order and
+// duplicate names are preserved.
+func (d *Decoder) Tags() []flac.Tag {
+	if len(d.comments) == 0 {
+		return nil
+	}
+	tags := make([]flac.Tag, len(d.comments))
+	for i, c := range d.comments {
+		name, value, _ := strings.Cut(c, "=")
+		tags[i] = flac.Tag{Name: name, Value: value}
+	}
+	return tags
+}
 
 // probeChunkDefault sizes seek-probe reads when STREAMINFO max frame size is unknown.
 const probeChunkDefault = 1 << 18 // 256 KiB

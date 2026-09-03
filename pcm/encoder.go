@@ -158,6 +158,60 @@ func validateConfig(op string, cfg Config) error {
 	return nil
 }
 
+// defaultVendor is the VORBIS_COMMENT vendor string written when Config.Vendor is
+// empty but a comment block is requested (tags present).
+const defaultVendor = "go-flac " + flac.Version
+
+// wantVorbisComment reports whether cfg asks for a VORBIS_COMMENT block. A block is
+// written only when there is something to carry (tags or an explicit vendor), so a
+// default Config stays byte-identical to a stream with no tags at all.
+func wantVorbisComment(cfg Config) bool {
+	return len(cfg.Tags) > 0 || cfg.Vendor != ""
+}
+
+// validateTagName rejects a Vorbis field name that is not ASCII 0x20..0x7D excluding
+// '=' (0x3D), the character set the Vorbis comment spec allows before the '='. An
+// empty name is also rejected. A rune iteration catches multi-byte or invalid UTF-8
+// bytes, which decode to a rune above 0x7D.
+func validateTagName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty tag name")
+	}
+	for _, c := range name {
+		if c < 0x20 || c > 0x7D || c == '=' {
+			return fmt.Errorf("invalid tag name %q: Vorbis field names must be ASCII 0x20-0x7D excluding '='", name)
+		}
+	}
+	return nil
+}
+
+// buildVorbisComment validates cfg's tags and returns the VORBIS_COMMENT block body.
+// op names the caller for error messages. It rejects an invalid tag name and a body
+// that would overflow the 24-bit metadata block length.
+func buildVorbisComment(op string, cfg Config) ([]byte, error) {
+	vendor := cfg.Vendor
+	if vendor == "" {
+		vendor = defaultVendor
+	}
+	// Accumulate the encoded size in int64 (overflow-safe on 32-bit) and reject before
+	// building the body, so an over-large Vendor/Tags set fails without first allocating
+	// the whole block. Layout matches meta.EncodeVorbisComment: 4-byte vendor length,
+	// vendor, 4-byte count, then 4-byte length + bytes per comment.
+	size := int64(4) + int64(len(vendor)) + 4
+	comments := make([]string, len(cfg.Tags))
+	for i, t := range cfg.Tags {
+		if err := validateTagName(t.Name); err != nil {
+			return nil, fmt.Errorf("go-flac/pcm: %s: tag %d: %w", op, i, err)
+		}
+		comments[i] = t.Name + "=" + t.Value
+		size += int64(4) + int64(len(comments[i]))
+	}
+	if size > meta.MaxMetadataBodyLen {
+		return nil, fmt.Errorf("go-flac/pcm: %s: VORBIS_COMMENT block is %d bytes, exceeds the %d-byte metadata block limit", op, size, meta.MaxMetadataBodyLen)
+	}
+	return meta.EncodeVorbisComment(vendor, comments), nil
+}
+
 // init (re)initializes e to write a fresh FLAC stream to w using cfg. It backs
 // NewEncoder (on a zero-valued Encoder), Reset (on a previously used one), and the
 // one-shot EncodeInterleaved path; op names the calling API for error messages.
@@ -250,6 +304,30 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 	}
 	e.points = e.points[:0]
 
+	return e.writeInitialMetadata(op)
+}
+
+// writeInitialMetadata writes the stream marker and the up-front metadata region to
+// e.w: STREAMINFO, an optional VORBIS_COMMENT block, and (when a seek table is
+// requested) the SEEKTABLE placeholder plus PADDING. It is split out of init to keep
+// that method's control flow legible; it reads the config already stored in e.cfg.
+func (e *Encoder) writeInitialMetadata(op string) error {
+	w, cfg := e.w, e.cfg
+
+	// Build the VORBIS_COMMENT block (if requested) before writing anything, so a bad
+	// tag name or an oversized block fails before any bytes reach the sink. It is
+	// written after STREAMINFO and, when a SEEKTABLE is present, before it: the
+	// SEEKTABLE shrink in Close depends on SEEKTABLE being immediately followed by the
+	// last=1 PADDING block, so nothing may come between them.
+	var vcBody []byte
+	if wantVorbisComment(cfg) {
+		b, err := buildVorbisComment(op, cfg)
+		if err != nil {
+			return err
+		}
+		vcBody = b
+	}
+
 	if cfg.SeekTableInterval > 0 {
 		if e.ws == nil {
 			return fmt.Errorf("go-flac/pcm: %s: SeekTableInterval requires an io.WriteSeeker sink", op)
@@ -276,13 +354,23 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 		if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
 			return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
 		}
+		vcLen := 0
+		if vcBody != nil {
+			if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeVorbisComment, len(vcBody))); err != nil { // last=0
+				return fmt.Errorf("go-flac/pcm: %s: write VORBIS_COMMENT header: %w", op, err)
+			}
+			if _, err := w.Write(vcBody); err != nil {
+				return fmt.Errorf("go-flac/pcm: %s: write VORBIS_COMMENT body: %w", op, err)
+			}
+			vcLen = 4 + len(vcBody)
+		}
 		stBody := meta.SeekTablePlaceholder(e.seekMaxPoints)
 		if _, err := w.Write(meta.EncodeBlockHeader(false, meta.TypeSeekTable, len(stBody))); err != nil {
 			return fmt.Errorf("go-flac/pcm: %s: write SEEKTABLE header: %w", op, err)
 		}
 		// SEEKTABLE body offset = "fLaC" + STREAMINFO header (StreamInfoBodyOffset) +
-		// STREAMINFO body + SEEKTABLE header (4).
-		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + 4)
+		// STREAMINFO body + the VORBIS_COMMENT block (0 when absent) + SEEKTABLE header (4).
+		e.seekBodyOff = int64(meta.StreamInfoBodyOffset + meta.StreamInfoBodyLen + vcLen + 4)
 		if _, err := w.Write(stBody); err != nil {
 			return fmt.Errorf("go-flac/pcm: %s: write SEEKTABLE body: %w", op, err)
 		}
@@ -297,8 +385,21 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 		// sink keeps the 0 placeholder here and is patched with the measured value in
 		// Close.
 		blk := upfrontBlockSize(e.ws != nil, cfg)
-		body := meta.EncodeStreamInfo(e.si, blk, blk, 0, 0) // frame sizes unknown; last=1
-		if err := meta.WriteStreamHeader(w, body); err != nil {
+		siBody := meta.EncodeStreamInfo(e.si, blk, blk, 0, 0) // frame sizes unknown
+		if vcBody != nil {
+			// STREAMINFO is no longer the last block; the VORBIS_COMMENT block carries the
+			// last-block flag. Close patches only the STREAMINFO body (at StreamInfoBodyOffset),
+			// so the block that follows is undisturbed.
+			if err := meta.WriteStreamHeaderEx(w, siBody, false); err != nil { // last=0
+				return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
+			}
+			if _, err := w.Write(meta.EncodeBlockHeader(true, meta.TypeVorbisComment, len(vcBody))); err != nil { // last=1
+				return fmt.Errorf("go-flac/pcm: %s: write VORBIS_COMMENT header: %w", op, err)
+			}
+			if _, err := w.Write(vcBody); err != nil {
+				return fmt.Errorf("go-flac/pcm: %s: write VORBIS_COMMENT body: %w", op, err)
+			}
+		} else if err := meta.WriteStreamHeader(w, siBody); err != nil { // last=1, only block
 			return fmt.Errorf("go-flac/pcm: %s: write STREAMINFO: %w", op, err)
 		}
 	}
