@@ -41,16 +41,16 @@ type Config struct {
 	// Tags, when non-empty, makes the streaming Encoder and the one-shot
 	// EncodeInterleaved write a VORBIS_COMMENT metadata block carrying these fields in
 	// order, so the FLAC file embeds its own textual tags (title, artist, or any
-	// application-specific key). Each Tag.Name must be ASCII 0x20..0x7D excluding '=',
-	// validated when that block is built (NewEncoder, Reset, or EncodeInterleaved);
-	// duplicate names are allowed and order is preserved. FrameEncoder writes no
-	// metadata region and ignores Tags entirely. The decoder surfaces them via
-	// Decoder.Tags.
+	// application-specific key). Each Tag.Name must be ASCII 0x20..0x7D excluding '=' and
+	// each Tag.Value must be valid UTF-8, both validated when that block is built
+	// (NewEncoder, Reset, or EncodeInterleaved); duplicate names are allowed and order
+	// is preserved. FrameEncoder writes no metadata region and ignores Tags entirely.
+	// The decoder surfaces them via Decoder.Tags.
 	Tags []flac.Tag
 
-	// Vendor sets the VORBIS_COMMENT vendor string. The empty default becomes
-	// "go-flac <version>" whenever a VORBIS_COMMENT block is written. A VORBIS_COMMENT
-	// block is written only when Tags is non-empty or Vendor is set, so the default
-	// (no tags, no vendor) stays byte-identical to a stream with no tags at all.
+	// Vendor sets the VORBIS_COMMENT vendor string, which must be valid UTF-8. The empty
+	// default becomes "go-flac <version>" whenever a VORBIS_COMMENT block is written. A
+	// VORBIS_COMMENT block is written only when Tags is non-empty or Vendor is set, so the
+	// default (no tags, no vendor) stays byte-identical to a stream with no tags at all.
 	Vendor string
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"unicode/utf8"
 
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
@@ -186,12 +187,19 @@ func validateTagName(name string) error {
 }
 
 // buildVorbisComment validates cfg's tags and returns the VORBIS_COMMENT block body.
-// op names the caller for error messages. It rejects an invalid tag name and a body
-// that would overflow the 24-bit metadata block length.
+// op names the caller for error messages. It rejects an invalid tag name, a vendor
+// string or tag value that is not valid UTF-8 (the Vorbis comment spec stores both as
+// UTF-8), and a body that would overflow the 24-bit metadata block length.
 func buildVorbisComment(op string, cfg Config) ([]byte, error) {
 	vendor := cfg.Vendor
 	if vendor == "" {
 		vendor = defaultVendor
+	}
+	// The Vorbis comment spec stores the vendor string and every comment value as UTF-8.
+	// Reject non-UTF-8 input rather than emitting a non-conforming block that a strict
+	// decoder could refuse; tag names are checked separately by validateTagName.
+	if !utf8.ValidString(vendor) {
+		return nil, fmt.Errorf("go-flac/pcm: %s: vendor string is not valid UTF-8", op)
 	}
 	// Accumulate the encoded size in int64 (overflow-safe on 32-bit) and reject before
 	// building the body, so an over-large Vendor/Tags set fails without first allocating
@@ -202,6 +210,9 @@ func buildVorbisComment(op string, cfg Config) ([]byte, error) {
 	for i, t := range cfg.Tags {
 		if err := validateTagName(t.Name); err != nil {
 			return nil, fmt.Errorf("go-flac/pcm: %s: tag %d: %w", op, i, err)
+		}
+		if !utf8.ValidString(t.Value) {
+			return nil, fmt.Errorf("go-flac/pcm: %s: tag %d (%q): value is not valid UTF-8", op, i, t.Name)
 		}
 		comments[i] = t.Name + "=" + t.Value
 		size += int64(4) + int64(len(comments[i]))
