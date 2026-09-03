@@ -369,3 +369,110 @@ func TestEncoderRejectsOversizedVorbisComment(t *testing.T) {
 		t.Fatal("expected rejection of a VORBIS_COMMENT block exceeding the 24-bit length")
 	}
 }
+
+// TestEncoderRejectsNonUTF8VendorAndValue pins the UTF-8 validation the Vorbis comment
+// spec requires: a vendor string or a tag value carrying invalid UTF-8 is rejected when
+// the VORBIS_COMMENT block is built, rather than written into a non-conforming block.
+// Tag names are covered separately (TestEncoderRejectsInvalidTagName); here the names
+// are valid, so the value/vendor UTF-8 check is the only thing under test. All three
+// entry points that build the block (NewEncoder, EncodeInterleaved, Reset) must reject,
+// and the error must be the UTF-8 rejection specifically, so the test cannot stay green
+// if the guard is removed and some unrelated validation happens to fail the config.
+func TestEncoderRejectsNonUTF8VendorAndValue(t *testing.T) {
+	const badUTF8 = "\xff\xfe\xfd"       // raw high bytes that never form valid UTF-8
+	const loneSurrogate = "\xed\xa0\x80" // encodes U+D800, a lone surrogate: invalid UTF-8
+	base := Config{SampleRate: 44100, Channels: 1, BitDepth: 16}
+
+	badVendor := base
+	badVendor.Vendor = badUTF8
+
+	badValue := base
+	badValue.Tags = []flac.Tag{{Name: tagTitle, Value: badUTF8}}
+
+	surrogateValue := base
+	surrogateValue.Tags = []flac.Tag{{Name: tagTitle, Value: loneSurrogate}}
+
+	// rejected asserts err is the UTF-8 rejection, not merely any error: a bare err != nil
+	// would stay green if some future validation started failing these configs for another
+	// reason, letting the UTF-8 guard be removed silently.
+	rejected := func(t *testing.T, path string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s accepted invalid UTF-8", path)
+			return
+		}
+		if !strings.Contains(err.Error(), "UTF-8") {
+			t.Errorf("%s rejected for the wrong reason: %v", path, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+	}{
+		{"vendor", badVendor},
+		{"value", badValue},
+		{"value-lone-surrogate", surrogateValue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, errNew := NewEncoder(&bytes.Buffer{}, tc.cfg)
+			rejected(t, "NewEncoder", errNew)
+
+			rejected(t, "EncodeInterleaved", EncodeInterleaved(&bytes.Buffer{}, tc.cfg, genPCM(tc.cfg, 64)))
+
+			// Reset shares the same init -> writeInitialMetadata -> buildVorbisComment funnel;
+			// construct from a valid Config first, then reconfigure with the invalid one.
+			enc, err := NewEncoder(&bytes.Buffer{}, base) // base has no tags/vendor: valid
+			if err != nil {
+				t.Fatalf("NewEncoder(base): %v", err)
+			}
+			rejected(t, "Reset", enc.Reset(&bytes.Buffer{}, tc.cfg))
+		})
+	}
+}
+
+// TestEncoderMultibyteUTF8TagsRoundTrip confirms the UTF-8 validation does not reject
+// legitimate multibyte UTF-8: a vendor and values with CJK text and an emoji, plus a
+// value that itself contains '=' and a newline (both legal inside a comment value, which
+// the decoder splits only at the first '='), encode and round-trip byte-for-byte.
+func TestEncoderMultibyteUTF8TagsRoundTrip(t *testing.T) {
+	cfg := Config{
+		SampleRate: 44100, Channels: 2, BitDepth: 16, CompressionLevel: 5,
+		Vendor: "作曲家 🎧",
+		Tags: []flac.Tag{
+			{Name: tagTitle, Value: "クロウタドリの声"},
+			{Name: tagArtist, Value: "Turdus merula 🐦"},
+			{Name: "COMMENT", Value: "note=first line\nsecond line"},
+			{Name: "EMPTY", Value: ""}, // an empty value is valid UTF-8 and must survive
+		},
+	}
+	pcm := genPCM(cfg, 4096+128)
+
+	var buf bytes.Buffer
+	if err := EncodeInterleaved(&buf, cfg, pcm); err != nil {
+		t.Fatalf("EncodeInterleaved: %v", err)
+	}
+	d, err := NewDecoder(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	if got := d.Vendor(); got != cfg.Vendor {
+		t.Errorf("Vendor() = %q, want %q", got, cfg.Vendor)
+	}
+	got := d.Tags()
+	if len(got) != len(cfg.Tags) {
+		t.Fatalf("Tags() = %v, want %v", got, cfg.Tags)
+	}
+	for i, want := range cfg.Tags {
+		if got[i] != want {
+			t.Errorf("Tags()[%d] = %+v, want %+v", i, got[i], want)
+		}
+	}
+	var out bytes.Buffer
+	if _, err := d.WriteTo(&out); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), pcm) {
+		t.Errorf("decoded PCM differs from input")
+	}
+}
