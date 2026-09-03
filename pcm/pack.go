@@ -109,3 +109,50 @@ func deinterleaveSamplesGeneric(ch [][]int32, src []byte, blockSize, nch, bytesP
 		}
 	}
 }
+
+// packLE16Mono writes src[:n] as n consecutive little-endian int16 samples into
+// dst, four samples per 64-bit store so the compiler emits one widened move
+// instead of eight byte writes, then finishes the remainder one sample at a time.
+// It is the exact inverse of deinterleave16Mono and the widened analogue of
+// appendPacked's scalar 16-bit mono store. dst must hold at least 2*n bytes.
+//
+// Each sample is truncated to its low 16 bits via a uint16 cast BEFORE widening,
+// matching the scalar store: without that cast a negative int32 would sign-extend
+// into the neighboring sample's bytes. The shifts and PutUint64 are value-based
+// and little-endian on every architecture, so the bytes are identical to the
+// scalar store on all hosts, not only little-endian ones.
+func packLE16Mono(dst []byte, src []int32, n int) {
+	dst = dst[:2*n]
+	src = src[:n]
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		w := uint64(uint16(src[i])) | uint64(uint16(src[i+1]))<<16 |
+			uint64(uint16(src[i+2]))<<32 | uint64(uint16(src[i+3]))<<48
+		binary.LittleEndian.PutUint64(dst[2*i:], w)
+	}
+	for ; i < n; i++ {
+		binary.LittleEndian.PutUint16(dst[2*i:], uint16(src[i]))
+	}
+}
+
+// packLE16Stereo interleaves left[:n] and right[:n] as little-endian int16 pairs
+// (L0,R0,L1,R1,...) into dst, two stereo frames per 64-bit store, with a 32-bit
+// store for a final odd frame. It is the exact inverse of deinterleave16Stereo and
+// the widened analogue of appendPacked's scalar 16-bit stereo store. dst must hold
+// at least 4*n bytes. The uint16 casts truncate before widening for the same
+// sign-bleed reason as packLE16Mono, so output matches the scalar store on all
+// architectures.
+func packLE16Stereo(dst []byte, left, right []int32, n int) {
+	dst = dst[:4*n]
+	left = left[:n]
+	right = right[:n]
+	i := 0
+	for ; i+2 <= n; i += 2 {
+		w := uint64(uint16(left[i])) | uint64(uint16(right[i]))<<16 |
+			uint64(uint16(left[i+1]))<<32 | uint64(uint16(right[i+1]))<<48
+		binary.LittleEndian.PutUint64(dst[4*i:], w)
+	}
+	for ; i < n; i++ {
+		binary.LittleEndian.PutUint32(dst[4*i:], uint32(uint16(left[i]))|uint32(uint16(right[i]))<<16)
+	}
+}
