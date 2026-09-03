@@ -568,12 +568,24 @@ func appendPacked(dst []byte, fr *frame.Frame, bytesPS int) []byte {
 			}
 		}
 	case 2:
-		for i := range fr.BlockSize {
-			for ch := range nch {
-				v := uint16(fr.Channels[ch][i])
-				dst[idx] = byte(v)
-				dst[idx+1] = byte(v >> 8)
-				idx += 2
+		// 16-bit PCM (CD audio, the common capture path) takes widened 64-bit
+		// stores for mono and stereo, mirroring the widened loads in
+		// deinterleaveSamples; every other channel count uses the scalar store.
+		// The widened paths are byte-identical to the scalar store on all hosts.
+		switch nch {
+		case 1:
+			// The helper fills dst[idx:] for the whole block; idx is not read again.
+			packLE16Mono(dst[idx:], fr.Channels[0], fr.BlockSize)
+		case 2:
+			packLE16Stereo(dst[idx:], fr.Channels[0], fr.Channels[1], fr.BlockSize)
+		default:
+			for i := range fr.BlockSize {
+				for ch := range nch {
+					v := uint16(fr.Channels[ch][i])
+					dst[idx] = byte(v)
+					dst[idx+1] = byte(v >> 8)
+					idx += 2
+				}
 			}
 		}
 	case 3:

@@ -1,6 +1,7 @@
 package pcm
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tphakala/go-flac/internal/frame"
@@ -127,5 +128,87 @@ func TestDeinterleave16StereoTails(t *testing.T) {
 				t.Fatalf("n=%d i=%d: got L=%d R=%d, want L=%d R=%d", n, i, gotL[i], gotR[i], wantL[i], wantR[i])
 			}
 		}
+	}
+}
+
+// scalarPack16 is the byte-exact reference the widened 16-bit stores must match:
+// each int32 sample is truncated to its low 16 bits and emitted little-endian, the
+// same bytes appendPacked's generic scalar store produces. Interleaves nch channels
+// per inter-channel sample.
+func scalarPack16(ch [][]int32, n int) []byte {
+	nch := len(ch)
+	out := make([]byte, 2*n*nch)
+	idx := 0
+	for i := range n {
+		for c := range nch {
+			v := uint16(ch[c][i])
+			out[idx] = byte(v)
+			out[idx+1] = byte(v >> 8)
+			idx += 2
+		}
+	}
+	return out
+}
+
+// TestPackLE16MonoMatchesScalar pins the widened mono store byte-for-byte against
+// the scalar reference across tail-exercising block sizes, with samples that span
+// the signed range. Deleting the widened 64-bit store body (leaving only the
+// scalar tail) keeps this green; deleting the uint16() truncation cast reddens it
+// on the negative-sample cases below.
+func TestPackLE16MonoMatchesScalar(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 63, 64, 65, 255, 256, 4095, 4096, 4097} {
+		src := make([]int32, n)
+		for i := range n {
+			src[i] = int32(int16(uint16(i*131 + 7))) // spans negatives via int16 wrap
+		}
+		want := scalarPack16([][]int32{src}, n)
+		got := make([]byte, 2*n)
+		packLE16Mono(got, src, n)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("n=%d: widened mono store bytes differ from scalar reference", n)
+		}
+	}
+}
+
+// TestPackLE16StereoMatchesScalar pins the widened stereo store against the scalar
+// reference. Distinct scrambled left/right values per index catch a channel swap
+// or a shared-lane bug; the sizes exercise the 32-bit odd-frame tail.
+func TestPackLE16StereoMatchesScalar(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 63, 64, 65, 255, 256, 4095, 4096, 4097} {
+		left := make([]int32, n)
+		right := make([]int32, n)
+		for i := range n {
+			left[i] = int32(int16(uint16(i*29 + 3)))
+			right[i] = int32(int16(uint16(i*0x9E37 + 101))) // scrambled, distinct from left
+		}
+		want := scalarPack16([][]int32{left, right}, n)
+		got := make([]byte, 4*n)
+		packLE16Stereo(got, left, right, n)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("n=%d: widened stereo store bytes differ from scalar reference", n)
+		}
+	}
+}
+
+// TestPackLE16NegativeTruncation is the explicit sign-bleed guard: negative int32
+// samples must truncate to their low 16 bits, not sign-extend across neighbors.
+// Removing the uint16() cast in packLE16Mono/packLE16Stereo turns this red because
+// the sign extension of one lane bleeds into the widened word's other lanes.
+func TestPackLE16NegativeTruncation(t *testing.T) {
+	mono := []int32{-1, -2, -3, -4, -5}
+	wantMono := scalarPack16([][]int32{mono}, len(mono))
+	gotMono := make([]byte, 2*len(mono))
+	packLE16Mono(gotMono, mono, len(mono))
+	if !bytes.Equal(gotMono, wantMono) {
+		t.Fatalf("mono negatives: got % x, want % x", gotMono, wantMono)
+	}
+
+	left := []int32{-1, -100, -32768, 32767, -3}
+	right := []int32{-2, 12345, -1, -32768, 4}
+	wantStereo := scalarPack16([][]int32{left, right}, len(left))
+	gotStereo := make([]byte, 4*len(left))
+	packLE16Stereo(gotStereo, left, right, len(left))
+	if !bytes.Equal(gotStereo, wantStereo) {
+		t.Fatalf("stereo negatives: got % x, want % x", gotStereo, wantStereo)
 	}
 }
