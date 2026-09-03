@@ -17,8 +17,8 @@ const (
 	TypePadding = 1
 	// TypeSeekTable is the SEEKTABLE metadata block type.
 	TypeSeekTable = 3
-	// 2 APPLICATION, 4 VORBIS_COMMENT, 5 CUESHEET, 6 PICTURE are recognized and
-	// skipped by length; 127 is invalid.
+	// TypeVorbisComment (4) is parsed for its vendor string and tags; 2 APPLICATION,
+	// 5 CUESHEET, 6 PICTURE are recognized and skipped by length; 127 is invalid.
 	typeInvalid = 127
 )
 
@@ -75,6 +75,25 @@ func readMetadata(br *bitio.Reader) (StreamMeta, error) {
 				return StreamMeta{}, err
 			}
 			sm.SeekPoints = pts
+		case TypeVorbisComment:
+			body, err := readBytes(br, int(length))
+			if err != nil {
+				return StreamMeta{}, err // a short read is stream truncation, not a bad tag block
+			}
+			vendor, comments, err := parseVorbisComment(body)
+			if err != nil {
+				// A VORBIS_COMMENT whose body is internally malformed (a length field
+				// pointing past the block, an impossible count) is skipped, not fatal: the
+				// block is optional non-audio metadata, and before it was parsed at all it
+				// fell through to the default skip case, so failing the whole decode here
+				// would newly reject files that used to decode. (SEEKTABLE, by contrast, has
+				// always been parsed, so rejecting a malformed one is not a regression.) The
+				// truncation case above still fails, since that is a corrupt stream.
+				break
+			}
+			// The spec allows at most one VORBIS_COMMENT block; if a malformed stream
+			// carries several, the last one read wins, matching the SEEKTABLE handling.
+			sm.Vendor, sm.Comments = vendor, comments
 		default:
 			if err := skipBytes(br, int(length)); err != nil {
 				return StreamMeta{}, err

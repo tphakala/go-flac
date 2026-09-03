@@ -11,6 +11,43 @@ import (
 	flac "github.com/tphakala/go-flac"
 )
 
+// TestDecoderResetClearsTagsOnPoison pins the tag-clearing on the failed-Reset
+// (poison) path: after decoding a tagged stream, a Reset into an unparseable header
+// must leave Tags()/Vendor() empty rather than surfacing the previous stream's tags.
+// A tagged->untagged Reset would NOT pin this (the success path overwrites the fields
+// regardless); only a Reset that fails before that assignment exercises the clear.
+func TestDecoderResetClearsTagsOnPoison(t *testing.T) {
+	cfg := Config{SampleRate: 44100, BitDepth: 16, Channels: 2, CompressionLevel: 5}
+	c := cfg
+	c.Tags = []flac.Tag{{Name: tagTitle, Value: "first"}}
+	c.Vendor = "vend"
+	var buf bytes.Buffer
+	if err := EncodeInterleaved(&buf, c, genPCM(cfg, 4096)); err != nil {
+		t.Fatalf("EncodeInterleaved: %v", err)
+	}
+
+	d, err := NewDecoder(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	if len(d.Tags()) != 1 || d.Vendor() != "vend" {
+		t.Fatalf("precondition: tags not surfaced (tags=%v vendor=%q)", d.Tags(), d.Vendor())
+	}
+
+	// A poison Reset: a bad stream marker fails ReadMetadata before the success path
+	// re-populates the tag fields, so the pre-parse clears are all that keep the prior
+	// stream's tags from leaking.
+	if err := d.Reset(bytes.NewReader([]byte("NOPE not a flac stream"))); err == nil {
+		t.Fatal("expected Reset into a bad header to fail")
+	}
+	if got := d.Tags(); got != nil {
+		t.Errorf("Tags() = %v after a failed Reset, want nil (stale tags leaked)", got)
+	}
+	if got := d.Vendor(); got != "" {
+		t.Errorf("Vendor() = %q after a failed Reset, want empty (stale vendor leaked)", got)
+	}
+}
+
 // makeStream encodes a deterministic multi-frame FLAC stream of the given shape,
 // so the stream carries a finalized nonzero STREAMINFO MD5 (EncodeInterleaved
 // hashes the input), giving the decoder's MD5 verification real teeth.

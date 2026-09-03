@@ -25,6 +25,8 @@ type StreamMeta struct {
 	MaxBlock   int // STREAMINFO max block size; nominal block size when MinBlock == MaxBlock
 	MaxFrame   int // STREAMINFO max frame size in bytes (0 if unknown), for seek-probe sizing
 	SeekPoints []SeekPoint
+	Vendor     string   // VORBIS_COMMENT vendor string ("" when absent)
+	Comments   []string // VORBIS_COMMENT "NAME=value" fields (nil when absent)
 }
 
 // SeekPointBytes is the on-disk size of one SEEKTABLE point.

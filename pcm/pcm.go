@@ -1,5 +1,7 @@
 package pcm
 
+import flac "github.com/tphakala/go-flac"
+
 // Config controls encoder output.
 type Config struct {
 	SampleRate int // samples per second, e.g. 44100
@@ -35,4 +37,20 @@ type Config struct {
 	// stays at the all-zero sentinel for a non-seekable streaming sink); use
 	// EncodeInterleaved for an up-front MD5.
 	TotalSamples uint64
+
+	// Tags, when non-empty, makes the streaming Encoder and the one-shot
+	// EncodeInterleaved write a VORBIS_COMMENT metadata block carrying these fields in
+	// order, so the FLAC file embeds its own textual tags (title, artist, or any
+	// application-specific key). Each Tag.Name must be ASCII 0x20..0x7D excluding '=',
+	// validated when that block is built (NewEncoder, Reset, or EncodeInterleaved);
+	// duplicate names are allowed and order is preserved. FrameEncoder writes no
+	// metadata region and ignores Tags entirely. The decoder surfaces them via
+	// Decoder.Tags.
+	Tags []flac.Tag
+
+	// Vendor sets the VORBIS_COMMENT vendor string. The empty default becomes
+	// "go-flac <version>" whenever a VORBIS_COMMENT block is written. A VORBIS_COMMENT
+	// block is written only when Tags is non-empty or Vendor is set, so the default
+	// (no tags, no vendor) stays byte-identical to a stream with no tags at all.
+	Vendor string
 }
