@@ -54,8 +54,13 @@ func EncodeInterleaved(w io.Writer, cfg Config, pcm []byte) error {
 		// seekable one, which patches the same total_samples and md5-of-the-input at
 		// Close. cfg is a by-value copy, so this never touches the caller's struct.
 		cfg.TotalSamples = total
-		sum := md5.Sum(pcm)
-		knownMD5 = &sum
+		// Skip the up-front hash when the caller opted out (cfg.SkipMD5); leaving
+		// knownMD5 nil makes init take the SkipMD5 path and write the all-zero MD5, so
+		// the one-shot path never pays for the digest it is dropping.
+		if !cfg.SkipMD5 {
+			sum := md5.Sum(pcm)
+			knownMD5 = &sum
+		}
 	}
 
 	enc := encoderPool.Get().(*Encoder)

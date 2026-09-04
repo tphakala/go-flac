@@ -38,6 +38,15 @@ type Config struct {
 	// EncodeInterleaved for an up-front MD5.
 	TotalSamples uint64
 
+	// SkipMD5, when true, disables the STREAMINFO MD5 signature: the encoder writes
+	// the all-zero "unknown" MD5 (spec-legal) and skips hashing the input PCM, removing
+	// the MD5 pass from the encode hot path for callers that do not need the integrity
+	// signature or compute it out of band. The encoded audio and every other STREAMINFO
+	// field are unchanged; only the 16-byte MD5 goes from the input digest to all zeros.
+	// It applies to the streaming Encoder, the one-shot EncodeInterleaved, and
+	// FrameEncoder. The default (false) hashes the input and writes the digest.
+	SkipMD5 bool
+
 	// Tags, when non-empty, makes the streaming Encoder and the one-shot
 	// EncodeInterleaved write a VORBIS_COMMENT metadata block carrying these fields in
 	// order, so the FLAC file embeds its own textual tags (title, artist, or any

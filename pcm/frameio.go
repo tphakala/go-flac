@@ -35,6 +35,10 @@ type FrameEncoder struct {
 	work *frame.Workspace
 	md5  hash.Hash
 
+	// skipHash mirrors Config.SkipMD5: when true, emitFrame does not hash the input and
+	// streamInfoParams leaves the STREAMINFO MD5 at the all-zero "unknown" sentinel.
+	skipHash bool
+
 	// Incremental (Write/Finalize) state. leftover holds < one full block of trailing
 	// bytes carried between Write calls; carry is the reusable join buffer for
 	// leftover + the head of the next Write, exactly as Encoder.Write uses them.
@@ -75,6 +79,7 @@ func NewFrameEncoder(cfg Config) (*FrameEncoder, error) {
 		ch:       make([][]int32, cfg.Channels),
 		work:     frame.NewWorkspace(encoderBlockSize, cfg.Channels, params.MaxLPCOrder),
 		md5:      md5.New(),
+		skipHash: cfg.SkipMD5,
 	}
 	for c := range e.ch {
 		e.ch[c] = make([]int32, encoderBlockSize)
@@ -246,8 +251,11 @@ func (e *FrameEncoder) emitFrame(chunk []byte, n int, final bool, emit func(fram
 		return err
 	}
 	// Hash the raw interleaved input only after the caller accepted the frame, so a
-	// failed emit leaves the MD5 reflecting exactly the frames durably consumed.
-	e.md5.Write(chunk)
+	// failed emit leaves the MD5 reflecting exactly the frames durably consumed. When
+	// the caller opted out (Config.SkipMD5), hashing is skipped entirely.
+	if !e.skipHash {
+		e.md5.Write(chunk)
+	}
 
 	e.frameNum++
 	e.total += uint64(n)
@@ -290,7 +298,10 @@ func (e *FrameEncoder) streamInfoParams() (si flac.StreamInfo, minBlock, maxBloc
 	// After encoding, TotalSamples and the MD5 are final; Sum(nil) leaves the running
 	// hash untouched, so StreamInfoBytes may be called repeatedly.
 	si.TotalSamples = e.total
-	copy(si.MD5[:], e.md5.Sum(nil))
+	if !e.skipHash {
+		// SkipMD5 leaves si.MD5 at the all-zero "unknown" sentinel.
+		copy(si.MD5[:], e.md5.Sum(nil))
+	}
 	if !e.wrote {
 		// An empty input encodes no frames; finalize an empty stream (the MD5 of no
 		// bytes, no frame sizes) with the block size floored to the spec minimum,
