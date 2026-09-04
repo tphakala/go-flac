@@ -43,7 +43,10 @@ type StreamInfo struct {
 // value, carried in the stream as "NAME=value". Tags are an ordered list rather
 // than a map because the FLAC/Vorbis comment format preserves order and permits
 // repeated field names (for example several ARTIST fields). Name must be ASCII in
-// the range 0x20..0x7D excluding '=' (0x3D); Value is arbitrary UTF-8 text.
+// the range 0x20..0x7D excluding '=' (0x3D). When encoding, Value must be valid
+// UTF-8 text; the encoder rejects a value that is not. When decoding, Value carries
+// the stored comment bytes verbatim, so a value read back from a stream that another
+// tool wrote may not be valid UTF-8.
 type Tag struct {
 	Name  string
 	Value string

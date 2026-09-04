@@ -188,7 +188,10 @@ func (d *Decoder) Info() flac.StreamInfo { return d.info }
 
 // Vendor returns the VORBIS_COMMENT vendor string. It is "" both when the stream
 // carried no VORBIS_COMMENT block and when the block declared an empty vendor string,
-// so "" alone does not distinguish the two.
+// so "" alone does not distinguish the two. The string is returned verbatim and is
+// not validated as UTF-8, so a stream written by another tool may yield a value that
+// is not valid UTF-8; the go-flac encoder rejects non-UTF-8 vendor strings, so a
+// vendor string written by this package always round-trips as valid UTF-8.
 func (d *Decoder) Vendor() string { return d.vendor }
 
 // Tags returns the stream's VORBIS_COMMENT fields as ordered flac.Tag values, each
@@ -196,7 +199,10 @@ func (d *Decoder) Vendor() string { return d.vendor }
 // stream carried no VORBIS_COMMENT block and when the block carried no comment fields
 // (a vendor-only block), so nil alone does not distinguish the two. A comment with no
 // '=' yields a Tag whose Name is the whole string and whose Value is empty. Order and
-// duplicate names are preserved.
+// duplicate names are preserved. Values are returned verbatim and are not validated as
+// UTF-8: a value stored by another tool as non-UTF-8 bytes is returned unchanged. The
+// go-flac encoder rejects non-UTF-8 values, so tags written by this package always
+// round-trip as valid UTF-8.
 func (d *Decoder) Tags() []flac.Tag {
 	if len(d.comments) == 0 {
 		return nil
