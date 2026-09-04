@@ -34,7 +34,8 @@ type Reader struct {
 	acc     uint64    // bit accumulator, left-aligned: next bit to serve is bit 63
 	nbits   uint      // number of valid bits currently in acc, 0..64
 	tap     ByteTap
-	tapCur  int   // buf index of the next byte to hand to tap (consumption cursor)
+	rtap    ByteRangeTap // set when tap also folds byte ranges in bulk; drives deferred mode
+	tapCur  int          // buf index of the next byte to hand to tap (consumption cursor)
 	loaded  int64 // cumulative bytes ever shifted from buf into acc (never reset)
 	basePos int64 // absolute byte-offset seed (NewReaderAt); 0 for NewReader
 	err     error // sticky; once set, stays set
@@ -76,6 +77,14 @@ func (r *Reader) Reset(src io.Reader) {
 // no per-frame tap closure.
 type ByteTap interface{ TapByte(b byte) }
 
+// ByteRangeTap folds a whole run of consumed bytes at once. A tap that also
+// implements it can be switched to deferred bulk mode (SwitchTapToDeferred), in
+// which the hot read path does no per-byte tap work and consumed runs are handed
+// over in bulk at buffer-refill boundaries (readMore) and on demand (FlushTap).
+// The frame decoder uses this to fold the frame CRC-16 over large runs in bulk
+// instead of one byte at a time.
+type ByteRangeTap interface{ TapBytes(p []byte) }
+
 // TapFunc adapts a plain func(byte) to ByteTap. SetTap wraps its func argument in
 // a TapFunc, so closure-based callers (the standalone header read and the tests,
 // where a one-time closure allocation is fine) reach the tap through the
@@ -87,12 +96,40 @@ func (f TapFunc) TapByte(b byte) { f(b) }
 
 // SetTapper registers t to be called with every fully consumed source byte. It
 // reseats the consumption cursor so only bytes consumed WHILE t is installed are
-// tapped. Pass nil to clear the tap.
+// tapped. If t also implements ByteRangeTap it may later be switched to deferred
+// bulk mode with SwitchTapToDeferred. Pass nil to clear the tap.
 func (r *Reader) SetTapper(t ByteTap) {
 	if t != nil {
 		r.tapCur = r.consumedBytes() // next byte to be consumed
 	}
 	r.tap = t
+	r.rtap, _ = t.(ByteRangeTap) // nil interface asserts to (nil, false)
+}
+
+// SwitchTapToDeferred puts the installed range-capable tap into deferred bulk mode:
+// it stops the per-byte hot-path emit (by clearing the ByteTap gate) while keeping
+// the ByteRangeTap, so consumed runs are folded in bulk at readMore and FlushTap
+// instead of one byte at a time. The caller invokes it at a byte boundary where the
+// tap has already seen every consumed byte (tapCur == consumedBytes), so no byte is
+// skipped across the switch. It is a no-op if the current tap is not range-capable.
+func (r *Reader) SwitchTapToDeferred() {
+	if r.rtap != nil {
+		r.tap = nil
+	}
+}
+
+// FlushTap hands the range tap every byte consumed since the last flush (the run
+// buf[tapCur:consumedBytes]). It is used in deferred mode to sweep up the final run
+// of a frame before a value that must be excluded from the tap is read. It is a
+// no-op when no range tap is installed or nothing new has been consumed.
+func (r *Reader) FlushTap() {
+	if r.rtap == nil {
+		return
+	}
+	if fc := r.consumedBytes(); fc > r.tapCur {
+		r.rtap.TapBytes(r.buf[r.tapCur:fc])
+		r.tapCur = fc
+	}
 }
 
 // SetTap is the func-based form of SetTapper: fn is wrapped in TapFunc, or nil
@@ -129,11 +166,16 @@ func (r *Reader) readMore() {
 	if r.err != nil {
 		return
 	}
-	// Compact: drop fully-consumed bytes, keep the small unconsumed tail. At this
-	// point every fully-consumed byte has already been tapped (the prior op ran
-	// emitTaps), so fc == tapCur when a tap is installed and no un-tapped byte is
-	// discarded.
+	// Compact: drop fully-consumed bytes, keep the small unconsumed tail. Every
+	// fully-consumed byte must be tapped before it is discarded. In per-byte mode the
+	// prior op already ran emitTaps, so fc == tapCur here and the flush below is a
+	// no-op; in deferred mode nothing has been tapped since the last refill, so the
+	// flush hands the range tap the whole consumed run before compaction drops it.
 	fc := r.consumedBytes()
+	if r.rtap != nil && fc > r.tapCur {
+		r.rtap.TapBytes(r.buf[r.tapCur:fc])
+		r.tapCur = fc
+	}
 	if fc > 0 {
 		n := copy(r.buf, r.buf[fc:r.w]) // tail length is ceil(nbits/8) <= 8 bytes
 		r.w = n

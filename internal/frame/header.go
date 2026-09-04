@@ -23,8 +23,9 @@ func readHeader(br *bitio.Reader, si flac.StreamInfo, hdr *header) error {
 }
 
 // readHeaderBody reads the frame header fields and verifies the header CRC-8 using
-// the running value pointed to by c8. The caller installs the tap that maintains
-// c8 (and optionally the frame CRC-16) before calling.
+// the running value pointed to by c8. The caller installs the tap that maintains c8
+// (and, in the frame decoder, also records the consumed bytes for the bulk frame
+// CRC-16) before calling.
 func readHeaderBody(br *bitio.Reader, si flac.StreamInfo, hdr *header, c8 *uint8) (err error) {
 	sync, err := br.ReadBits(14)
 	if err != nil {
