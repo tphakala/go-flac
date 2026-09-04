@@ -41,6 +41,7 @@ type Decoder struct {
 	md5        hash.Hash
 	decoded    uint64 // inter-channel samples decoded so far
 	seeked     bool   // a seek happened; disables MD5 + truncation checks
+	skipMD5    bool   // caller opted out of MD5 hashing + verification (SkipMD5Verification)
 	done       bool
 	err        error
 }
@@ -50,12 +51,32 @@ var (
 	_ io.WriterTo = (*Decoder)(nil)
 )
 
-// NewDecoder reads the stream marker and metadata from r, returning a Decoder with
-// Info populated.
-func NewDecoder(r io.Reader) (*Decoder, error) {
+// DecoderOption configures a Decoder at construction (NewDecoder) or when it is
+// rebound to a new stream (Reset). Options are applied after the stream header is
+// parsed and before any audio is decoded.
+type DecoderOption func(*Decoder)
+
+// SkipMD5Verification disables the decoder's MD5 integrity check: the decoder does not
+// hash decoded PCM and does not compare it against the stream's STREAMINFO MD5 at end
+// of stream, removing the MD5 pass from the decode hot path for callers that trust the
+// source or verify it elsewhere. The decoded samples are identical; only
+// flac.ErrMD5Mismatch can no longer be returned. The cheaper sample-count truncation
+// check (flac.ErrTruncatedStream) still runs. The policy applies to the NewDecoder or
+// Reset call it is passed to and is not remembered across a later Reset.
+func SkipMD5Verification() DecoderOption {
+	return func(d *Decoder) { d.skipMD5 = true }
+}
+
+// NewDecoder reads the stream marker and metadata from r, returning a Decoder with Info
+// populated. Options (for example SkipMD5Verification) configure the decoder before any
+// audio is decoded.
+func NewDecoder(r io.Reader, opts ...DecoderOption) (*Decoder, error) {
 	d := &Decoder{}
 	if err := d.init("NewDecoder", r); err != nil {
 		return nil, err
+	}
+	for _, opt := range opts {
+		opt(d)
 	}
 	return d, nil
 }
@@ -74,12 +95,22 @@ func NewDecoder(r io.Reader) (*Decoder, error) {
 // the largest buffer it has needed. As with NewDecoder, seeking requires r to be
 // an io.Seeker.
 //
-// On success the decoder behaves exactly as a fresh NewDecoder(r) would. If Reset
-// returns an error the decoder must not be used except through another Reset,
+// On success the decoder behaves exactly as a fresh NewDecoder(r, opts...) would. If
+// Reset returns an error the decoder must not be used except through another Reset,
 // which fully recovers it; a nil r is rejected before any state changes, so the
 // previous stream stays intact.
-func (d *Decoder) Reset(r io.Reader) error {
-	return d.init("Reset", r)
+//
+// Options apply to this call only: a decoder built with SkipMD5Verification and later
+// Reset without it verifies again, so pass the option on every Reset that should keep
+// skipping (matching how Encoder.Reset re-derives its behavior from cfg each call).
+func (d *Decoder) Reset(r io.Reader, opts ...DecoderOption) error {
+	if err := d.init("Reset", r); err != nil {
+		return err
+	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return nil
 }
 
 // init rebinds the decoder to r and parses the stream header. It backs both
@@ -126,6 +157,9 @@ func (d *Decoder) init(op string, r io.Reader) error {
 	d.pending = nil
 	d.decoded = 0
 	d.seeked = false
+	// Re-derive the MD5 policy each init: NewDecoder and Reset apply their options after
+	// init, so a reused decoder honors the current call's options, not a prior call's.
+	d.skipMD5 = false
 	d.done = false
 	d.err = nil
 	d.rs = nil
@@ -501,20 +535,20 @@ func (d *Decoder) decodeNextFrame() error {
 	}
 	d.decoded += uint64(d.frame.BlockSize)
 	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
-	if !d.seeked {
-		d.md5.Write(d.buf) // MD5 is meaningless once frames have been skipped
+	if !d.seeked && !d.skipMD5 {
+		d.md5.Write(d.buf) // MD5 is meaningless once frames have been skipped, or when opted out
 	}
 	d.pending = d.buf
 	return nil
 }
 
-// finish verifies the stream MD5 and sample count (when not seeked) and marks
-// the decoder done.
+// finish verifies the stream MD5 (unless the caller passed SkipMD5Verification) and
+// the sample count, when not seeked, and marks the decoder done.
 func (d *Decoder) finish() error {
 	d.done = true
 	if !d.seeked {
 		var zero [16]byte
-		if d.info.MD5 != zero {
+		if !d.skipMD5 && d.info.MD5 != zero {
 			var sum [16]byte
 			copy(sum[:], d.md5.Sum(nil))
 			if sum != d.info.MD5 {

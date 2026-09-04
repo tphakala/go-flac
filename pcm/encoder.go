@@ -53,7 +53,7 @@ type Encoder struct {
 	frameNum           uint64
 	total              uint64
 	wrote              bool
-	skipHash           bool // STREAMINFO MD5 supplied up front (one-shot path): skip per-frame hashing
+	skipHash           bool // skip per-frame input hashing (MD5 supplied up front by one-shot, or Config.SkipMD5 opt-out)
 	minBlock, maxBlock int
 	minFrame, maxFrame int
 
@@ -262,8 +262,12 @@ func (e *Encoder) init(op string, w io.Writer, cfg Config, knownMD5 *[16]byte) e
 	// a non-seekable sink emits a finalized header with no seek-back. Both placeholder
 	// writers below read e.si, so the values flow into whichever branch runs.
 	e.si = flac.StreamInfo{SampleRate: cfg.SampleRate, Channels: cfg.Channels, BitDepth: cfg.BitDepth, TotalSamples: cfg.TotalSamples}
-	e.skipHash = knownMD5 != nil
-	if e.skipHash {
+	// skipHash disables per-frame input hashing. It is set both when the MD5 was
+	// supplied up front (the one-shot EncodeInterleaved path) and when the caller asked
+	// to skip the MD5 entirely (cfg.SkipMD5). Only the supplied-up-front case patches a
+	// value into si.MD5; cfg.SkipMD5 leaves it at the all-zero "unknown" sentinel.
+	e.skipHash = knownMD5 != nil || cfg.SkipMD5
+	if knownMD5 != nil {
 		e.si.MD5 = *knownMD5
 	}
 	e.params = params
@@ -496,9 +500,10 @@ func (e *Encoder) emitBlock(chunk []byte, n int, final bool) error {
 	// durably written and a caller that retries the same input cannot double-hash
 	// it. deinterleaveSamples and EncodeFrame read chunk but never modify it, so
 	// deferring the hash is byte-identical to the previous order on the success
-	// path (verified by the byte-identical golden test). When the MD5 is supplied
-	// up front (the one-shot EncodeInterleaved path), per-frame hashing would only
-	// recompute the same digest, so it is skipped.
+	// path (verified by the byte-identical golden test). Hashing is skipped when the
+	// MD5 was supplied up front (the one-shot EncodeInterleaved path, where it would
+	// only recompute the same digest) or when the caller opted out via Config.SkipMD5
+	// (where si.MD5 stays the all-zero "unknown" sentinel).
 	if !e.skipHash {
 		e.md5.Write(chunk)
 	}
@@ -580,8 +585,10 @@ func (e *Encoder) Close() error {
 	si := e.si
 	si.TotalSamples = e.total
 	if !e.skipHash {
-		// When the MD5 was supplied up front, si.MD5 already carries it (set in init);
-		// only the internally hashed path needs to fold in the running digest here.
+		// skipHash is false only on the internally hashed path, which folds the running
+		// digest in here. The skip cases are already handled elsewhere: an up-front MD5
+		// was set into si.MD5 in init, and Config.SkipMD5 leaves it at the all-zero
+		// "unknown" sentinel.
 		copy(si.MD5[:], e.md5.Sum(nil))
 	}
 	// Floor the measured block sizes to the FLAC-legal minimum for the same reason

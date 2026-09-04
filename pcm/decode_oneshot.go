@@ -35,18 +35,20 @@ var ErrDecodeLimit = errors.New("go-flac/pcm: decoded size limit exceeded")
 // It stops at DefaultMaxDecodedBytes and returns a wrapped ErrDecodeLimit if the
 // output would exceed it. For a different ceiling use DecodeInterleavedLimit; for
 // a stream of unknown or unbounded length use NewDecoder, which streams the audio
-// in memory proportional to a single buffer.
-func DecodeInterleaved(r io.Reader) ([]byte, flac.StreamInfo, error) {
-	return DecodeInterleavedLimit(r, DefaultMaxDecodedBytes)
+// in memory proportional to a single buffer. Options (for example
+// SkipMD5Verification) are forwarded to the underlying decoder.
+func DecodeInterleaved(r io.Reader, opts ...DecoderOption) ([]byte, flac.StreamInfo, error) {
+	return DecodeInterleavedLimit(r, DefaultMaxDecodedBytes, opts...)
 }
 
 // DecodeInterleavedLimit is DecodeInterleaved with a caller-chosen ceiling.
 // maxBytes is the largest decoded output it will return; a decode that would
 // exceed it stops and returns a wrapped ErrDecodeLimit. A maxBytes of zero or
 // less removes the ceiling, which is only safe for a stream the caller produced
-// or has otherwise bounded.
-func DecodeInterleavedLimit(r io.Reader, maxBytes int) ([]byte, flac.StreamInfo, error) {
-	d, err := NewDecoder(r)
+// or has otherwise bounded. Options (for example SkipMD5Verification) are forwarded
+// to the underlying decoder.
+func DecodeInterleavedLimit(r io.Reader, maxBytes int, opts ...DecoderOption) ([]byte, flac.StreamInfo, error) {
+	d, err := NewDecoder(r, opts...)
 	if err != nil {
 		return nil, flac.StreamInfo{}, err
 	}
