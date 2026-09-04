@@ -36,9 +36,9 @@ type Reader struct {
 	tap     ByteTap
 	rtap    ByteRangeTap // set when tap also folds byte ranges in bulk; drives deferred mode
 	tapCur  int          // buf index of the next byte to hand to tap (consumption cursor)
-	loaded  int64 // cumulative bytes ever shifted from buf into acc (never reset)
-	basePos int64 // absolute byte-offset seed (NewReaderAt); 0 for NewReader
-	err     error // sticky; once set, stays set
+	loaded  int64        // cumulative bytes ever shifted from buf into acc (never reset)
+	basePos int64        // absolute byte-offset seed (NewReaderAt); 0 for NewReader
+	err     error        // sticky; once set, stays set
 }
 
 // NewReader returns a Reader over r. The Reader reads directly from r in blocks
@@ -83,6 +83,10 @@ type ByteTap interface{ TapByte(b byte) }
 // over in bulk at buffer-refill boundaries (readMore) and on demand (FlushTap).
 // The frame decoder uses this to fold the frame CRC-16 over large runs in bulk
 // instead of one byte at a time.
+//
+// p aliases the Reader's internal buffer and is valid only for the duration of the
+// call: readMore reuses and compacts that buffer, so an implementation that needs to
+// retain the bytes must copy them. The frame CRC tap folds them immediately.
 type ByteRangeTap interface{ TapBytes(p []byte) }
 
 // TapFunc adapts a plain func(byte) to ByteTap. SetTap wraps its func argument in
@@ -167,15 +171,13 @@ func (r *Reader) readMore() {
 		return
 	}
 	// Compact: drop fully-consumed bytes, keep the small unconsumed tail. Every
-	// fully-consumed byte must be tapped before it is discarded. In per-byte mode the
-	// prior op already ran emitTaps, so fc == tapCur here and the flush below is a
-	// no-op; in deferred mode nothing has been tapped since the last refill, so the
-	// flush hands the range tap the whole consumed run before compaction drops it.
+	// fully-consumed byte must be recorded before it is discarded, so flush the pending
+	// run first (same operation FlushTap performs at frame end). In per-byte mode the
+	// prior op already ran emitTaps, so tapCur is current and FlushTap is a no-op; in
+	// deferred mode it hands the range tap the whole consumed run before compaction
+	// drops it.
+	r.FlushTap()
 	fc := r.consumedBytes()
-	if r.rtap != nil && fc > r.tapCur {
-		r.rtap.TapBytes(r.buf[r.tapCur:fc])
-		r.tapCur = fc
-	}
 	if fc > 0 {
 		n := copy(r.buf, r.buf[fc:r.w]) // tail length is ceil(nbits/8) <= 8 bytes
 		r.w = n
