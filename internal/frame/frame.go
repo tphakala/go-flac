@@ -27,27 +27,39 @@ type Frame struct {
 }
 
 // frameCRC is the reusable, non-closure CRC tap installed on the bitio.Reader for
-// the duration of one Decode. It folds every consumed frame byte into the frame
-// CRC-16, and additionally into the header CRC-8 while updateC8 is set (the header
-// phase). Because it lives on the reused Frame, installing it (SetTapper(&dst.crc))
-// allocates nothing: a pointer into the already-heap-resident Frame is stored in
-// the Reader's interface field, not boxed.
+// the duration of one Decode. It records every consumed frame byte (the header, the
+// subframe body, and the byte-align padding, i.e. exactly the CRC-16 coverage) into
+// a reused scratch buffer, and folds the header CRC-8 per byte while the reader is in
+// per-byte mode. The frame CRC-16 is computed once at frame end with a single bulk
+// crc.Checksum16 fold over scratch (sum16), instead of one byte at a time on the hot
+// decode path. Because it lives on the reused Frame, installing it (SetTapper(&dst.crc))
+// allocates nothing: a pointer into the already-heap-resident Frame is stored in the
+// Reader's interface fields, not boxed. Recording is allocation-free too once the
+// scratch has grown to the largest frame seen (reset keeps its capacity).
 type frameCRC struct {
-	c8       uint8
-	c16      uint16
-	updateC8 bool
+	c8      uint8  // running header CRC-8, folded per byte in the header (per-byte) phase
+	scratch []byte // recorded frame bytes: header + body + padding, no trailing CRC-16
 }
 
-// reset clears the accumulators and re-enters the header (CRC-8) phase.
-func (fc *frameCRC) reset() { fc.c8, fc.c16, fc.updateC8 = 0, 0, true }
+// reset clears the CRC-8 and empties the scratch (keeping its capacity for reuse).
+func (fc *frameCRC) reset() { fc.c8, fc.scratch = 0, fc.scratch[:0] }
 
-// TapByte folds one consumed byte into the running CRCs.
+// TapByte records one consumed byte and folds it into the running header CRC-8. It is
+// the per-byte path used only for the (small) frame header; the body is recorded in
+// bulk via TapBytes once the reader switches to deferred mode.
 func (fc *frameCRC) TapByte(b byte) {
-	fc.c16 = crc.Update16(fc.c16, b)
-	if fc.updateC8 {
-		fc.c8 = crc.Update8(fc.c8, b)
-	}
+	fc.scratch = append(fc.scratch, b)
+	fc.c8 = crc.Update8(fc.c8, b)
 }
+
+// TapBytes records a bulk run of consumed body bytes. The header CRC-8 is already
+// finalized by the time deferred mode is active, so this only appends to scratch.
+func (fc *frameCRC) TapBytes(p []byte) { fc.scratch = append(fc.scratch, p...) }
+
+// sum16 computes the frame CRC-16 over every recorded byte. crc.Checksum16 (a bulk
+// fold, init 0, MSB-first, no reflection) is bit-identical to the byte-at-a-time
+// Update16 loop, so this matches the stored frame CRC-16 exactly.
+func (fc *frameCRC) sum16() uint16 { return crc.Checksum16(fc.scratch) }
 
 // header holds the parsed frame header.
 type header struct {
@@ -72,18 +84,19 @@ func (h *header) channels() int {
 // Decode decodes exactly one frame from br into dst. dst.Channels is grown/reused
 // to hold the frame's channels at its block size.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
-	// The CRC tap is a reusable, non-closure ByteTap living on the Frame, so
-	// decoding a frame allocates no tap closure. reset() zeroes the accumulators
-	// and enters the header (CRC-8) phase; SetTapper installs &dst.crc with no
-	// allocation (a pointer into the already-heap-resident Frame).
+	// The CRC tap is a reusable, non-closure tap living on the Frame, so decoding a
+	// frame allocates no tap closure (and nothing at all once its scratch has grown to
+	// the largest frame seen). reset() clears the CRC-8 and empties the scratch;
+	// SetTapper installs &dst.crc with no allocation (a pointer into the already-heap-
+	// resident Frame). The tap starts in per-byte mode for the header.
 	dst.crc.reset()
 	br.SetTapper(&dst.crc)
 	defer br.SetTapper(nil)
 
-	// readHeaderBody folds every consumed byte into both CRC-8 and CRC-16 (the
-	// frame CRC-16 covers the header too) and verifies the header CRC-8 internally
-	// against dst.crc.c8. A clean end of stream surfaces here as io.EOF (the sync
-	// read hit EOF at a frame boundary).
+	// readHeaderBody records every consumed header byte into scratch (the frame CRC-16
+	// covers the header too) and folds the header CRC-8 per byte, verifying it
+	// internally against dst.crc.c8. A clean end of stream surfaces here as io.EOF (the
+	// sync read hit EOF at a frame boundary).
 	var hdr header
 	if err := readHeaderBody(br, si, &hdr, &dst.crc.c8); err != nil {
 		return err
@@ -95,11 +108,12 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 			err = io.ErrUnexpectedEOF
 		}
 	}()
-	// The header CRC-8 is finalized; the frame body only feeds the CRC-16. The tap
-	// stays installed continuously (no reseat): at this byte-aligned boundary every
-	// consumed byte including the stored CRC-8 is already tapped, so clearing
-	// updateC8 only stops folding CRC-8 without skipping or double-tapping a byte.
-	dst.crc.updateC8 = false
+	// The header CRC-8 is finalized; the frame body only feeds the CRC-16. Switch the
+	// tap to deferred bulk mode: at this byte-aligned boundary every consumed byte
+	// including the stored CRC-8 is already recorded (tapCur == consumedBytes), so the
+	// switch stops the per-byte header path and hands the body to TapBytes in bulk
+	// runs without skipping or double-recording a byte.
+	br.SwitchTapToDeferred()
 
 	nch := hdr.channels()
 	ensureChannels(dst, nch, hdr.blockSize)
@@ -136,7 +150,14 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	if err := br.SkipToByteBoundary(); err != nil {
 		return err
 	}
-	computed := dst.crc.c16
+	// Sweep up the last body run (including the padding byte just consumed by
+	// SkipToByteBoundary), then fold the whole recorded frame in bulk. computed is
+	// captured BEFORE the stored CRC-16 is read, so those 2 bytes are excluded: even
+	// though the tap is still installed during the ReadBits(16) below, any readMore it
+	// triggers only loads bytes into acc without advancing consumedBytes, so it flushes
+	// nothing, and no FlushTap runs after this point.
+	br.FlushTap()
+	computed := dst.crc.sum16()
 	stored, err := br.ReadBits(16)
 	if err != nil {
 		return err
