@@ -58,6 +58,28 @@ reusable scratch buffer keeps steady-state per-block heap allocations near zero.
 negative sample index. Mid-stream resync from a non-fLaC start position remains
 future work.
 
+## Audio quality
+
+FLAC is lossless, so quality is not perceptual: every encode reproduces the
+input bit for bit. What varies is compression ratio, speed, and whether the
+round trip stays lossless at all bit depths. go-flac is bit-exact at 16, 24,
+and 32-bit and encodes faster and slightly smaller than ffmpeg's FLAC. Notably
+it stays lossless at 32-bit, where ffmpeg's FLAC encoder truncates to 24-bit
+and its output is no longer bit-exact.
+
+Snapshot (2026-09-05), real 48 kHz recordings, decoded output compared to the
+source:
+
+| Depth  | go-flac                       | ffmpeg flac             |
+|--------|-------------------------------|-------------------------|
+| 16-bit | bit-exact, ratio 0.45, ~19 ms | bit-exact, 0.46, ~71 ms |
+| 24-bit | bit-exact, ratio 0.64, ~25 ms | bit-exact, 0.64, ~61 ms |
+| 32-bit | bit-exact, ratio 0.51         | not bit-exact, 0.48     |
+
+Lossless everywhere, faster, and correct at 32-bit where ffmpeg is not. This is
+a small directional sample and timings are machine-dependent; a corpus-based
+regression gate is planned (#45).
+
 ## Usage
 
 Decode a FLAC file to raw interleaved little-endian PCM:
