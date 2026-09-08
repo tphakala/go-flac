@@ -202,15 +202,10 @@ func quantizeCoefficientsInto(qOut []int32, lpc []float64, precision int) (qn, s
 	// cmax = frac * 2^exp with frac in [0.5, 1). Scaling by 2^(precision-1-exp)
 	// puts the largest coefficient at ~2^(precision-1).
 	_, exp := math.Frexp(cmax)
-	shift = precision - 1 - exp
-	if shift > maxQLPShift {
-		shift = maxQLPShift
-	}
-	if shift < 0 {
-		// Coefficients too large for a non-negative shift; the decoder rejects
-		// negative shift, so clamp to 0 and let the coeff clamp below handle it.
-		shift = 0
-	}
+	shift = min(precision-1-exp, maxQLPShift)
+	// Coefficients too large for a non-negative shift; the decoder rejects
+	// negative shift, so clamp to 0 and let the coeff clamp below handle it.
+	shift = max(shift, 0)
 
 	qmax := int32(1)<<(precision-1) - 1
 	qmin := -(int32(1) << (precision - 1))

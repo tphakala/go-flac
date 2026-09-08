@@ -39,7 +39,7 @@ func (o *bitReadOracle) readBits(n uint) (uint64, error) {
 		return 0, io.ErrUnexpectedEOF // some bits present but fewer than requested
 	}
 	var v uint64
-	for i := uint(0); i < n; i++ {
+	for range n {
 		v = (v << 1) | o.bitAt(o.pos)
 		o.pos++
 	}
