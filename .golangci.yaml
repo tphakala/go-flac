@@ -4,8 +4,10 @@
 #   - dropped the birdnet-go-specific forbidigo logger patterns and the gosec
 #     settings block (no structured logger; gosec not enabled)
 #   - kept gocritic's ruleguard wired to rules/*.go for modern-Go patterns
-#   - modernize stays disabled: it panics on Go 1.26 + atomic types in
-#     golangci-lint v2.11.4 (known bug)
+#   - modernize stays disabled: the golangci-lint v2.11.4 panic on Go 1.26 +
+#     atomic types is fixed as of v2.13.2, but enabling it surfaces new
+#     suggestions (min/max builtins, range-over-int), so adopting it is a
+#     separate change
 version: "2"
 output:
   sort-order:
