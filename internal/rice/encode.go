@@ -372,10 +372,7 @@ func PlanResidualInt32(res []int32, blockSize, predOrder, maxPartOrder int, sc *
 	// over the whole block, so ncols = min(maxParam5, globalRaw+2)+1 covers every
 	// query while keeping the finest sums pass cheap for quiet signals.
 	globalMaxU := finestMaxU(sc, res, blockSize, predOrder, pmax)
-	kHi := bits.Len64(globalMaxU) + 2
-	if kHi > maxParam5 {
-		kHi = maxParam5
-	}
+	kHi := min(bits.Len64(globalMaxU)+2, maxParam5)
 	ncols := kHi + 1
 
 	sc.ensureSums(P, ncols)
@@ -415,10 +412,7 @@ func PlanResidualInt64(res []int64, blockSize, predOrder, maxPartOrder int, sc *
 		}
 		globalMaxU = max(zigzag64(lo), zigzag64(hi))
 	}
-	kHi := bits.Len64(globalMaxU) + 2
-	if kHi > maxParam5 {
-		kHi = maxParam5
-	}
+	kHi := min(bits.Len64(globalMaxU)+2, maxParam5)
 	ncols := kHi + 1
 
 	P := 1 << pmax
@@ -603,11 +597,7 @@ func mergeUpward(sums, maxU []uint64, parts, ncols int) {
 		for k := range ncols {
 			sums[dst+k] = sums[a+k] + sums[b+k]
 		}
-		if maxU[2*p+1] > maxU[2*p] {
-			maxU[p] = maxU[2*p+1]
-		} else {
-			maxU[p] = maxU[2*p]
-		}
+		maxU[p] = max(maxU[2*p+1], maxU[2*p])
 	}
 }
 

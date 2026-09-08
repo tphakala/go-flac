@@ -62,13 +62,8 @@ func (c m5GoldenCase) synthPCM() []int32 {
 		for ch := range c.Channels {
 			// Correlated base across channels (so stereo decorrelation engages)
 			// plus per-channel noise and a wasted-bits-friendly low bit pattern.
-			v := int32((i*73+ch*9301)%(int(maxv/4)+1)) + int32(r.Intn(257)) - 128
-			if v > maxv {
-				v = maxv
-			}
-			if v < minv {
-				v = minv
-			}
+			v := min(int32((i*73+ch*9301)%(int(maxv/4)+1))+int32(r.Intn(257))-128, maxv)
+			v = max(v, minv)
 			out[i*c.Channels+ch] = v
 		}
 	}

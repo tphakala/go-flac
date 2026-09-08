@@ -55,10 +55,7 @@ func ncolsFor(res []int32) int {
 		}
 		globalMaxU = max(zigzag(lo), zigzag(hi))
 	}
-	kHi := bits.Len64(globalMaxU) + 2
-	if kHi > maxParam5 {
-		kHi = maxParam5
-	}
+	kHi := min(bits.Len64(globalMaxU)+2, maxParam5)
 	return kHi + 1
 }
 

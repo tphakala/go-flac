@@ -393,18 +393,10 @@ func (d *Decoder) firstSample(fr *frame.Frame) int64 {
 // into d.probeFrame. It returns the frame's absolute start and end offsets, or ok=false
 // when no complete frame remains before streamEnd. It does not disturb d.br.
 func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
-	window := int64(2 * d.maxFrame)
-	if window < probeChunkDefault {
-		window = probeChunkDefault
-	}
-	if window > maxProbeWindow {
-		window = maxProbeWindow
-	}
+	window := max(int64(2*d.maxFrame), probeChunkDefault)
+	window = min(window, maxProbeWindow)
 	for b < d.streamEnd {
-		n := d.streamEnd - b
-		if n > window {
-			n = window
-		}
+		n := min(d.streamEnd-b, window)
 		if _, err = d.rs.Seek(b, io.SeekStart); err != nil {
 			return 0, 0, false, err
 		}
@@ -431,9 +423,7 @@ func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 				return 0, 0, false, nil
 			}
 			window *= 2 // grow and retry from the same base
-			if window > maxProbeWindow {
-				window = maxProbeWindow
-			}
+			window = min(window, maxProbeWindow)
 		default: // FrameNotFound
 			if atEnd {
 				return 0, 0, false, nil
