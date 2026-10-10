@@ -26,8 +26,8 @@ func decodeOneSubframe64(t *testing.T, raw []byte, n, bps int) []int64 {
 // wired to the SIMD restore kernels) and decodeSubframe64 (int64, scalar restore).
 // The two must agree sample-for-sample and both must reconstruct the original
 // samples. This pins the wired int32 restore path bit-exact to the scalar
-// reference across FIXED orders 0..4 and LPC orders that straddle the SIMD gate
-// at 8 (tonal signals select high-order LPC).
+// reference across FIXED orders 0..4 and LPC orders on both sides of the
+// scalar/SIMD cutover (tonal signals select high-order LPC).
 func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 	const n = 4096
 	// Signals are amplitude-normalized to func(i, amp); the caller scales amp to
@@ -89,7 +89,7 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 		}
 	}
 	// Guard the test's own reach: if signal selection drifts so the SIMD LPC
-	// kernel (order >= 8) or the fixed path is no longer exercised, this parity
+	// kernel (orders above the per-architecture scalar ceiling) or the fixed path is no longer exercised, this parity
 	// test would silently stop covering the wired code.
 	if !sawFixed {
 		t.Fatal("no FIXED subframe exercised; parity test lost fixed-restore coverage")

@@ -2,6 +2,12 @@
 
 package i32
 
+// maxScalarRestoreOrder is the largest order LPCRestore routes to the pure-Go
+// scalar kernels (lpc_small.go). There is no SIMD path on these builds; the
+// value is deliberately conservative (the original ceiling) because the larger
+// kernels are not measured here.
+const maxScalarRestoreOrder = 7
+
 func interleave2I32(dst, a, b []int32)   { interleave2Go(dst, a, b) }
 func deinterleave2I32(a, b, src []int32) { deinterleave2Go(a, b, src) }
 

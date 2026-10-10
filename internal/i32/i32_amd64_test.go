@@ -364,7 +364,7 @@ func TestLPCRestoreAVX2_ParityWithGo(t *testing.T) {
 		for _, coeffs := range lpcCoeffSets() {
 			order := len(coeffs)
 			if order < minLPCRestoreOrder || order > maxLPCRestoreOrder || n-order < 1 {
-				continue // dispatch routes these to the Go recurrence
+				continue // outside the AVX2 kernel range, other paths handle these
 			}
 			rc := reverseCoeffs(coeffs)
 			for _, shift := range lpcShifts {
@@ -592,5 +592,23 @@ func TestRiceSumsHighAVX2_NoOverwrite(t *testing.T) {
 		if sums[i] != math.MaxUint64 {
 			t.Errorf("riceSumsHighAVX2 wrote past end at sums[%d] = %d", i, sums[i])
 		}
+	}
+}
+
+// BenchmarkLPCRestoreAVX2Order times the AVX2 recurrence kernel directly, so the
+// SIMD side of the scalar cutover stays measurable whatever LPCRestore routes.
+func BenchmarkLPCRestoreAVX2Order(b *testing.B) {
+	if !cpu.X86.AVX2 {
+		b.Skip("AVX2 not available")
+	}
+	src, dst := benchSrcDst()
+	for _, order := range []int{8, 9, 10, 11, 12} {
+		rc := reverseCoeffs(benchLPCCoeffs(order))
+		b.Run("o"+itoa(order), func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				lpcRestoreAVX2(dst, src, rc, 12)
+			}
+		})
 	}
 }

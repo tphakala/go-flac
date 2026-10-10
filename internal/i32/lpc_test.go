@@ -79,12 +79,12 @@ func lpcRestoreOracle(out, residual, coeffs []int32, shift uint) {
 var lpcSizes = []int{1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 100, 1000, 1024, 1025}
 
 // lpcCoeffSets are representative quantized-LPC coefficient vectors: every order
-// 1..8, then 12 and 32 (FLAC's range is 1..32). Values stay within ~15-bit qlp
+// 1..8, then 9..12 and 32 (FLAC's range is 1..32). Values stay within ~15-bit qlp
 // precision, and the signs vary so the int64 accumulation and the >>shift sign
 // handling are exercised.
 func lpcCoeffSets() [][]int32 {
-	// An order-12 and an order-32 set with alternating-sign, decaying magnitudes.
-	orders := []int{12, 32}
+	// Orders 9..12 and 32 sets with alternating-sign, decaying magnitudes.
+	orders := []int{9, 10, 11, 12, 32}
 	sets := make([][]int32, 0, 8+len(orders))
 	sets = append(sets,
 		[]int32{4096},

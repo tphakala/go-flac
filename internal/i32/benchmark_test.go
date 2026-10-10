@@ -296,7 +296,8 @@ func BenchmarkRestore4Go_1000(b *testing.B) {
 // LPC benchmarks pair the dispatched path against the pure-Go reference at two
 // representative FLAC predictor orders. LPCResidualEncode is a parallel FIR;
 // LPCRestore is the serial decode recurrence (vectorized only across taps, and
-// only above minLPCRestoreOrder), benched honestly so the difference is visible.
+// only above the per-architecture scalar ceiling maxScalarRestoreOrder), benched
+// honestly so the difference is visible.
 
 func benchLPCCoeffs(order int) []int32 {
 	c := make([]int32, order)
@@ -384,12 +385,13 @@ func BenchmarkLPCRestore32Go_1000(b *testing.B) {
 
 // BenchmarkLPCRestoreOrder measures the decode recurrence per predictor order.
 // "dispatch" is the public path, "generic" the lpcRestoreGo reference, and
-// "dispatch_4096" the public path at the usual FLAC block size. Orders 8 and 12
-// are reference points around minLPCRestoreOrder.
+// "dispatch_4096" the public path at the usual FLAC block size. "scalar" times
+// the specialized kernel directly (orders up to maxScalarKernelOrder), whatever
+// the routing, so the scalar and SIMD sides of the cutover stay comparable.
 func BenchmarkLPCRestoreOrder(b *testing.B) {
 	src, dst := benchSrcDst()
 	src4096, dst4096 := benchSrcDstN(4096)
-	for _, order := range []int{1, 2, 3, 4, 5, 6, 7, 8, 12} {
+	for _, order := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
 		coeffs := benchLPCCoeffs(order)
 		name := "o" + itoa(order)
 		b.Run(name+"/dispatch", func(b *testing.B) {
@@ -404,6 +406,14 @@ func BenchmarkLPCRestoreOrder(b *testing.B) {
 				lpcRestoreGo(dst, src, coeffs, 12)
 			}
 		})
+		if order <= maxScalarKernelOrder {
+			b.Run(name+"/scalar", func(b *testing.B) {
+				b.SetBytes(benchN * 4 * 2)
+				for b.Loop() {
+					lpcRestoreScalar(dst, src, coeffs, 12)
+				}
+			})
+		}
 		b.Run(name+"/dispatch_4096", func(b *testing.B) {
 			b.SetBytes(4096 * 4 * 2)
 			for b.Loop() {

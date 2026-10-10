@@ -564,3 +564,60 @@ func TestRiceSumsHighNEON_NoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkLPCRestoreNEONOrder times the NEON recurrence kernel directly, so the
+// SIMD side of the scalar cutover stays measurable whatever LPCRestore routes.
+func BenchmarkLPCRestoreNEONOrder(b *testing.B) {
+	if !cpu.ARM64.NEON {
+		b.Skip("NEON not available")
+	}
+	src, dst := benchSrcDst()
+	for order := 2; order <= 12; order++ {
+		rc := reverseCoeffs(benchLPCCoeffs(order))
+		b.Run("o"+itoa(order), func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				lpcRestoreNEON(dst, src, rc, 12)
+			}
+		})
+	}
+}
+
+// TestLPCRestoreNEON_LowOrderParity pins the NEON kernel at orders 2..7, which
+// include orders below minNEONRestoreOrder that are not covered by
+// TestLPCRestoreNEON_ParityWithGo, two-buffer and exact in-place.
+func TestLPCRestoreNEON_LowOrderParity(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	for order := 2; order <= 7; order++ {
+		for _, tc := range smallCasesByOrder()[order] {
+			n := len(tc.res)
+			if n-order < 1 {
+				continue
+			}
+			rc := reverseCoeffs(tc.coeffs)
+			want := make([]int32, n)
+			got := make([]int32, n)
+			inPlace := make([]int32, n)
+			shifts := smallShifts
+			if n > 64 {
+				shifts = largeShifts
+			}
+			for _, shift := range shifts {
+				if shift > maxLPCShift {
+					continue // LPCRestore clamps before dispatch; the kernel never sees these
+				}
+				lpcRestoreGo(want, tc.res, tc.coeffs, shift)
+				lpcRestoreNEON(got, tc.res, rc, shift)
+				sameI32(t, got, want, func() string { return "neon order=" + itoa(order) + " " + tc.name + " shift=" + itoa(int(shift)) })
+
+				copy(inPlace, tc.res)
+				lpcRestoreNEON(inPlace, inPlace, rc, shift)
+				sameI32(t, inPlace, want, func() string {
+					return "neon in-place order=" + itoa(order) + " " + tc.name + " shift=" + itoa(int(shift))
+				})
+			}
+		}
+	}
+}

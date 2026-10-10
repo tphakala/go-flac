@@ -124,11 +124,11 @@ type smallCase struct {
 	oracleShifts []uint
 }
 
-// smallCasesByOrder holds, for each order 0..8, every coefficient family x
+// smallCasesByOrder holds, for each order 0..maxScalarKernelOrder+1, every coefficient family x
 // residual family x size plus the unit-tap vectors (a mis-rotated history or
 // swapped coefficient changes the output). Built once and shared by the tests.
 var smallCasesByOrder = sync.OnceValue(func() [][]smallCase {
-	byOrder := make([][]smallCase, 9)
+	byOrder := make([][]smallCase, maxScalarKernelOrder+2)
 	for order := range byOrder {
 		type resKey struct {
 			family string
@@ -166,9 +166,10 @@ var smallCasesByOrder = sync.OnceValue(func() [][]smallCase {
 	return byOrder
 })
 
-// TestLPCRestoreSmallOrder_MatchesGo checks every order 0..8 against the
-// reference for all shifts, including exact in-place aliasing (orders outside
-// 1..7 take the reference path and must agree trivially).
+// TestLPCRestoreSmallOrder_MatchesGo checks every order 0..maxScalarKernelOrder+1 against the
+// reference for all shifts, including exact in-place aliasing (orders 1..maxScalarKernelOrder
+// run the specialized kernels; orders outside that range fall back to the
+// reference path inside lpcRestoreScalar and must agree trivially).
 func TestLPCRestoreSmallOrder_MatchesGo(t *testing.T) {
 	for order, cases := range smallCasesByOrder() {
 		for _, tc := range cases {
@@ -194,7 +195,7 @@ func TestLPCRestoreSmallOrder_MatchesGo(t *testing.T) {
 }
 
 func TestLPCRestoreSmallOrder_MatchesOracle(t *testing.T) {
-	for order := 1; order <= maxScalarRestoreOrder; order++ {
+	for order := 1; order <= maxScalarKernelOrder; order++ {
 		for _, tc := range smallCasesByOrder()[order] {
 			n := len(tc.res)
 			if n > 64 {
@@ -213,7 +214,7 @@ func TestLPCRestoreSmallOrder_MatchesOracle(t *testing.T) {
 
 func TestLPCRestoreSmallOrder_NoOverwrite(t *testing.T) {
 	const tail = 4
-	for order := 1; order <= maxScalarRestoreOrder; order++ {
+	for order := 1; order <= maxScalarKernelOrder; order++ {
 		coeffs := smallCoeffFamilies[0].coeffs(order)
 		for _, n := range smallSizes(order) {
 			if n > 64 {
@@ -242,7 +243,7 @@ func TestLPCRestoreSmallOrder_NoOverwrite(t *testing.T) {
 func TestLPCRestoreSmallOrder_Random(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
 	for range 1000 {
-		order := r.IntN(9)
+		order := r.IntN(maxScalarKernelOrder + 2)
 		n := r.IntN(301)
 		coeffs := make([]int32, order)
 		full := r.IntN(2) == 0
@@ -277,9 +278,9 @@ func TestLPCRestoreSmallOrder_Random(t *testing.T) {
 }
 
 // TestLPCRestoreDispatch_ParityWithGo is untagged and goes through the public
-// LPCRestore, so it covers the small-order routing and lpcRestoreI32 on every
-// build variant (amd64, arm64 and the generic fallback). Under
-// GODEBUG=cpu.avx2=off it also covers the scalar path for orders 8..32.
+// LPCRestore, so it covers the per-architecture scalar routing and lpcRestoreI32 on
+// every build variant (amd64, arm64 and the generic fallback). Under
+// GODEBUG=cpu.avx2=off it also covers lpcRestoreGo above the scalar ceiling.
 func TestLPCRestoreDispatch_ParityWithGo(t *testing.T) {
 	for order := 1; order <= maxLPCRestoreOrder; order++ {
 		coeffs := smallCoeffFamilies[0].coeffs(order)
