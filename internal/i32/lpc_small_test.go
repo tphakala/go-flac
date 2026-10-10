@@ -167,8 +167,9 @@ var smallCasesByOrder = sync.OnceValue(func() [][]smallCase {
 })
 
 // TestLPCRestoreSmallOrder_MatchesGo checks every order 0..maxScalarKernelOrder+1 against the
-// reference for all shifts, including exact in-place aliasing (orders outside
-// 1..maxScalarKernelOrder take the reference path and must agree trivially).
+// reference for all shifts, including exact in-place aliasing (orders 1..maxScalarKernelOrder
+// run the specialized kernels; orders outside that range fall back to the
+// reference path inside lpcRestoreScalar and must agree trivially).
 func TestLPCRestoreSmallOrder_MatchesGo(t *testing.T) {
 	for order, cases := range smallCasesByOrder() {
 		for _, tc := range cases {

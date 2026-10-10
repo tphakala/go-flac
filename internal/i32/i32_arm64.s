@@ -668,7 +668,7 @@ lpcenc_neon_done:
 // oldest vecTaps (a multiple of 4) are widened (SMLAL/SMLAL2) into int64
 // accumulators, summed (ADD.2D), and folded to a scalar (ADDP). scalarTaps =
 // ((order+2) & 3) + 2 keeps the newest 2..5 taps scalar. The dispatch gates order
-// in [minNEONRestoreOrder, 32] and n-order >= 1.
+// in [max(minNEONRestoreOrder, maxScalarRestoreOrder+1), 32] and n-order >= 1.
 TEXT ·lpcRestoreNEON(SB), NOSPLIT, $0-80
     MOVD out_base+0(FP), R5
     MOVD out_len+8(FP), R4           // n

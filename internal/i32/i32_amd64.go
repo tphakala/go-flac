@@ -44,7 +44,7 @@ func deinterleave2AVX(a, b, src []int32)
 var hasAVX2 = cpu.X86.AVX2
 
 // minLPCRestoreOrder is the smallest predictor order at which the SIMD decode
-// recurrence kernel beats the scalar Go recurrence. The recurrence is serial
+// recurrence kernel beats the generic scalar Go recurrence. The recurrence is serial
 // (each output feeds the next), so SIMD only helps once the per-output tap dot
 // product has enough work to amortize its horizontal reduction; below this the
 // scalar path wins. Tuned from the benchmarks. The scalar route takes
@@ -175,7 +175,7 @@ func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
 // lpcRestoreI32 dispatches the quantized-LPC decode recurrence. Each output
 // feeds the next prediction, so the kernel vectorizes only the per-output tap
 // dot product and pays off only once the order is large enough to amortize the
-// horizontal reduction; below that it stays on the scalar Go recurrence.
+// horizontal reduction; below that LPCRestore uses the specialized scalar kernels.
 func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
 	if hasAVX2 && order >= minLPCRestoreOrder && order <= maxLPCRestoreOrder && len(out)-order >= 1 {

@@ -364,7 +364,7 @@ func TestLPCRestoreAVX2_ParityWithGo(t *testing.T) {
 		for _, coeffs := range lpcCoeffSets() {
 			order := len(coeffs)
 			if order < minLPCRestoreOrder || order > maxLPCRestoreOrder || n-order < 1 {
-				continue // dispatch routes these to the Go recurrence
+				continue // outside the AVX2 kernel range, other paths handle these
 			}
 			rc := reverseCoeffs(coeffs)
 			for _, shift := range lpcShifts {

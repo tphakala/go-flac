@@ -89,7 +89,7 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 		}
 	}
 	// Guard the test's own reach: if signal selection drifts so the SIMD LPC
-	// kernel (order >= 8) or the fixed path is no longer exercised, this parity
+	// kernel (orders above the per-architecture scalar ceiling) or the fixed path is no longer exercised, this parity
 	// test would silently stop covering the wired code.
 	if !sawFixed {
 		t.Fatal("no FIXED subframe exercised; parity test lost fixed-restore coverage")

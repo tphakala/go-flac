@@ -131,7 +131,7 @@ func diff3NEON(dst, src []int32)
 func diff4NEON(dst, src []int32)
 
 // minNEONRestoreOrder is the smallest predictor order at which the SIMD decode
-// recurrence kernel beats the scalar Go recurrence on NEON (tuned from the
+// recurrence kernel beats the specialized scalar kernels on NEON (tuned from the
 // Raspberry Pi 5 benchmarks). Below it the serial dependency leaves too little
 // per-output tap work to amortize the horizontal reduction. The scalar route
 // takes precedence up to maxScalarRestoreOrder (see LPCRestore), so NEON is
@@ -168,7 +168,9 @@ func lpcRestoreI32(out, residual, coeffs []int32, shift uint) {
 		lpcRestoreNEON(out, residual, rc[:order], shift)
 		return
 	}
-	lpcRestoreGo(out, residual, coeffs, shift)
+	// Without NEON LPCRestore still wants the specialized kernels for every
+	// order that has one; lpcRestoreScalar falls back to lpcRestoreGo above them.
+	lpcRestoreScalar(out, residual, coeffs, shift)
 }
 
 //go:noescape

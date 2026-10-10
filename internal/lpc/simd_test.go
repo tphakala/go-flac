@@ -169,7 +169,7 @@ func TestRestoreFixed32Parity(t *testing.T) {
 // emits, lengths at and beyond the order, and full-range magnitudes.
 func TestRestoreLPC32Parity(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x2f5e))
-	orders := []int{1, 2, 4, 7, 8, 9, 12, 16, 31, 32}
+	orders := []int{1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 31, 32}
 	lengths := []int{1, 2, 5, 8, 9, 16, 33, 64, 256, 4096}
 	shifts := []int{0, 1, 9, 14, 15}
 	for _, order := range orders {
