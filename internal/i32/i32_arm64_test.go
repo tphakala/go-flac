@@ -564,3 +564,70 @@ func TestRiceSumsHighNEON_NoOverwrite(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkLPCRestoreNEONOrder times the NEON recurrence kernel directly, so the
+// SIMD side of the scalar cutover stays measurable whatever LPCRestore routes.
+func BenchmarkLPCRestoreNEONOrder(b *testing.B) {
+	if !cpu.ARM64.NEON {
+		b.Skip("NEON not available")
+	}
+	src, dst := benchSrcDst()
+	for order := 2; order <= 12; order++ {
+		rc := reverseCoeffs(benchLPCCoeffs(order))
+		b.Run("o"+itoa(order), func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				lpcRestoreNEON(dst, src, rc, 12)
+			}
+		})
+	}
+}
+
+// TestLPCRestoreNEON_LowOrderParity pins the NEON kernel at orders 2..7, which
+// reach below minNEONRestoreOrder and so are not covered by
+// TestLPCRestoreNEON_ParityWithGo, over the int32 extreme coefficient families, every
+// shift, two-buffer and exact in-place.
+func TestLPCRestoreNEON_LowOrderParity(t *testing.T) {
+	if !cpu.ARM64.NEON {
+		t.Skip("NEON not available")
+	}
+	check := func(order, n int, coeffs, res []int32, shift uint, name string) {
+		if n-order < 1 {
+			return
+		}
+		rc := reverseCoeffs(coeffs)
+		want := make([]int32, n)
+		lpcRestoreGo(want, res, coeffs, shift)
+		got := make([]int32, n)
+		lpcRestoreNEON(got, res, rc, shift)
+		inPlace := append([]int32(nil), res...)
+		lpcRestoreNEON(inPlace, inPlace, rc, shift)
+		for i := range want {
+			if got[i] != want[i] || inPlace[i] != want[i] {
+				t.Fatalf("%s order=%d n=%d shift=%d [%d]: two-buffer %d in-place %d want %d",
+					name, order, n, shift, i, got[i], inPlace[i], want[i])
+			}
+		}
+	}
+	for order := 2; order <= 7; order++ {
+		for _, n := range paritySizes {
+			for _, rf := range smallResFamilies {
+				res := make([]int32, n)
+				rf.fill(res)
+				for _, cf := range smallCoeffFamilies {
+					for shift := uint(0); shift < 64; shift++ {
+						check(order, n, cf.coeffs(order), res, shift, cf.name+"/"+rf.name)
+					}
+				}
+				for _, coeffs := range lpcCoeffSets() {
+					if len(coeffs) != order {
+						continue
+					}
+					for shift := uint(0); shift < 64; shift++ {
+						check(order, n, coeffs, res, shift, "set/"+rf.name)
+					}
+				}
+			}
+		}
+	}
+}

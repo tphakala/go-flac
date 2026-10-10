@@ -244,8 +244,9 @@ func fixedAbsSumsGo(src []int32, sums *[5]uint64) {
 // residual[i] is read at step i, and the recurrence otherwise reads only
 // already-written outputs. Partial overlap is not supported.
 //
-// Orders 1..7 take the specialized kernels in lpc_small.go instead; this is the
-// reference they are tested against.
+// Orders 1..maxScalarRestoreOrder (per architecture) take the specialized
+// kernels in lpc_small.go instead; this is the reference they are tested
+// against.
 func lpcRestoreGo(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
 	w := min(order, len(out))

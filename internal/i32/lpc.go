@@ -94,7 +94,8 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 		shift = maxLPCShift
 	}
 	if order := len(coeffs); order <= maxScalarRestoreOrder {
-		// Always below the SIMD minimum order, so no dispatch is needed.
+		// The per-architecture ceiling is tuned so the scalar kernels beat
+		// the SIMD dispatch at and below it.
 		lpcRestoreScalar(out[:n], residual[:n], coeffs, shift)
 		return
 	}

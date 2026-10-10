@@ -1,7 +1,7 @@
 package i32
 
 // lpcRestoreScalar is the pure-Go decode recurrence specialized for predictor
-// orders 1..maxScalarRestoreOrder. It is bit-exact with lpcRestoreGo (same int64
+// orders 1..maxScalarKernelOrder. It is bit-exact with lpcRestoreGo (same int64
 // accumulation, arithmetic shift of the full sum, int32 narrowing and wraparound
 // add) and keeps the same aliasing contract: out and residual may be the same
 // slice, partial overlap is not supported. Other orders use lpcRestoreGo.
@@ -15,14 +15,17 @@ package i32
 // unrolled per order; the shift is already clamped to maxLPCShift, and the
 // &63 in the loops only tells the compiler the count is in range.
 
-// maxScalarRestoreOrder is the largest order with a specialized kernel. It is
-// below the SIMD minimum orders (minLPCRestoreOrder, minNEONRestoreOrder, both 8),
-// so the public LPCRestore routes these orders here before any SIMD dispatch.
-const maxScalarRestoreOrder = 7
+// maxScalarKernelOrder is the largest order with a specialized kernel. Which of
+// these orders LPCRestore routes here is per architecture: maxScalarRestoreOrder
+// in i32_amd64.go, i32_arm64.go and i32_other.go.
+const maxScalarKernelOrder = 10
+
+// A routing ceiling above the kernels that exist would not compile.
+const _ = uint(maxScalarKernelOrder - maxScalarRestoreOrder)
 
 func lpcRestoreScalar(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
-	if order < 1 || order > maxScalarRestoreOrder {
+	if order < 1 || order > maxScalarKernelOrder {
 		lpcRestoreGo(out, residual, coeffs, shift)
 		return
 	}
@@ -52,6 +55,12 @@ func lpcRestoreScalar(out, residual, coeffs []int32, shift uint) {
 		lpcRestore6(dst, res, coeffs, hist, shift)
 	case 7:
 		lpcRestore7(dst, res, coeffs, hist, shift)
+	case 8:
+		lpcRestore8(dst, res, coeffs, hist, shift)
+	case 9:
+		lpcRestore9(dst, res, coeffs, hist, shift)
+	case 10:
+		lpcRestore10(dst, res, coeffs, hist, shift)
 	}
 }
 
@@ -157,5 +166,50 @@ func lpcRestore7(dst, res, coeffs, hist []int32, shift uint) {
 		v := r + int32(acc>>(shift&63))
 		dst[i] = v
 		x7, x6, x5, x4, x3, x2, x1 = x6, x5, x4, x3, x2, x1, int64(v)
+	}
+}
+
+// lpcRestore8 is the order-8 kernel.
+//
+//nolint:dupl // intentional: order-specialized unrolled restore kernels
+func lpcRestore8(dst, res, coeffs, hist []int32, shift uint) {
+	c0, c1, c2, c3, c4, c5, c6, c7 := int64(coeffs[0]), int64(coeffs[1]), int64(coeffs[2]), int64(coeffs[3]), int64(coeffs[4]), int64(coeffs[5]), int64(coeffs[6]), int64(coeffs[7])
+	x1, x2, x3, x4, x5, x6, x7, x8 := int64(hist[7]), int64(hist[6]), int64(hist[5]), int64(hist[4]), int64(hist[3]), int64(hist[2]), int64(hist[1]), int64(hist[0])
+	dst = dst[:len(res)]
+	for i, r := range res {
+		acc := c7*x8 + c6*x7 + c5*x6 + c4*x5 + c3*x4 + c2*x3 + c1*x2 + c0*x1
+		v := r + int32(acc>>(shift&63))
+		dst[i] = v
+		x8, x7, x6, x5, x4, x3, x2, x1 = x7, x6, x5, x4, x3, x2, x1, int64(v)
+	}
+}
+
+// lpcRestore9 is the order-9 kernel.
+//
+//nolint:dupl // intentional: order-specialized unrolled restore kernels
+func lpcRestore9(dst, res, coeffs, hist []int32, shift uint) {
+	c0, c1, c2, c3, c4, c5, c6, c7, c8 := int64(coeffs[0]), int64(coeffs[1]), int64(coeffs[2]), int64(coeffs[3]), int64(coeffs[4]), int64(coeffs[5]), int64(coeffs[6]), int64(coeffs[7]), int64(coeffs[8])
+	x1, x2, x3, x4, x5, x6, x7, x8, x9 := int64(hist[8]), int64(hist[7]), int64(hist[6]), int64(hist[5]), int64(hist[4]), int64(hist[3]), int64(hist[2]), int64(hist[1]), int64(hist[0])
+	dst = dst[:len(res)]
+	for i, r := range res {
+		acc := c8*x9 + c7*x8 + c6*x7 + c5*x6 + c4*x5 + c3*x4 + c2*x3 + c1*x2 + c0*x1
+		v := r + int32(acc>>(shift&63))
+		dst[i] = v
+		x9, x8, x7, x6, x5, x4, x3, x2, x1 = x8, x7, x6, x5, x4, x3, x2, x1, int64(v)
+	}
+}
+
+// lpcRestore10 is the order-10 kernel.
+//
+//nolint:dupl // intentional: order-specialized unrolled restore kernels
+func lpcRestore10(dst, res, coeffs, hist []int32, shift uint) {
+	c0, c1, c2, c3, c4, c5, c6, c7, c8, c9 := int64(coeffs[0]), int64(coeffs[1]), int64(coeffs[2]), int64(coeffs[3]), int64(coeffs[4]), int64(coeffs[5]), int64(coeffs[6]), int64(coeffs[7]), int64(coeffs[8]), int64(coeffs[9])
+	x1, x2, x3, x4, x5, x6, x7, x8, x9, x10 := int64(hist[9]), int64(hist[8]), int64(hist[7]), int64(hist[6]), int64(hist[5]), int64(hist[4]), int64(hist[3]), int64(hist[2]), int64(hist[1]), int64(hist[0])
+	dst = dst[:len(res)]
+	for i, r := range res {
+		acc := c9*x10 + c8*x9 + c7*x8 + c6*x7 + c5*x6 + c4*x5 + c3*x4 + c2*x3 + c1*x2 + c0*x1
+		v := r + int32(acc>>(shift&63))
+		dst[i] = v
+		x10, x9, x8, x7, x6, x5, x4, x3, x2, x1 = x9, x8, x7, x6, x5, x4, x3, x2, x1, int64(v)
 	}
 }
