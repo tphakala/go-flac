@@ -42,7 +42,8 @@ const maxLPCRestoreOrder = 32
 // FirstSIMDRestoreOrder returns the smallest predictor order LPCRestore
 // dispatches to a SIMD decode kernel (AVX2 on amd64, NEON on arm64) on this
 // build and CPU; every order from it through maxLPCRestoreOrder takes the
-// SIMD kernel. It returns 0 when no order does: builds without a SIMD restore
+// SIMD kernel when the block is longer than the order (otherwise LPCRestore
+// copies the residual). It returns 0 when no order does: builds without a SIMD restore
 // kernel, or a CPU (or GODEBUG setting) without the required feature. It is
 // derived from the same constants and CPU flag LPCRestore routes on, so tests
 // can assert their reach against it.
