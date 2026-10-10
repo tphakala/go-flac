@@ -149,9 +149,11 @@ func BenchmarkMidSideDecodeGo_1000(b *testing.B) {
 	}
 }
 
-func benchSrcDst() (src, dst []int32) {
-	src = make([]int32, benchN)
-	dst = make([]int32, benchN)
+func benchSrcDst() (src, dst []int32) { return benchSrcDstN(benchN) }
+
+func benchSrcDstN(n int) (src, dst []int32) {
+	src = make([]int32, n)
+	dst = make([]int32, n)
 	for i := range src {
 		src[i] = int32(i * i)
 	}
@@ -377,6 +379,37 @@ func BenchmarkLPCRestore32Go_1000(b *testing.B) {
 	b.SetBytes(benchN * 4 * 2)
 	for b.Loop() {
 		lpcRestoreGo(dst, src, coeffs, 12)
+	}
+}
+
+// BenchmarkLPCRestoreOrder measures the decode recurrence per predictor order.
+// "dispatch" is the public path, "generic" the lpcRestoreGo reference, and
+// "dispatch_4096" the public path at the usual FLAC block size. Orders 8 and 12
+// are reference points around minLPCRestoreOrder.
+func BenchmarkLPCRestoreOrder(b *testing.B) {
+	src, dst := benchSrcDst()
+	src4096, dst4096 := benchSrcDstN(4096)
+	for _, order := range []int{1, 2, 3, 4, 5, 6, 7, 8, 12} {
+		coeffs := benchLPCCoeffs(order)
+		name := "o" + itoa(order)
+		b.Run(name+"/dispatch", func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				LPCRestore(dst, src, coeffs, 12)
+			}
+		})
+		b.Run(name+"/generic", func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				lpcRestoreGo(dst, src, coeffs, 12)
+			}
+		})
+		b.Run(name+"/dispatch_4096", func(b *testing.B) {
+			b.SetBytes(4096 * 4 * 2)
+			for b.Loop() {
+				LPCRestore(dst4096, src4096, coeffs, 12)
+			}
+		})
 	}
 }
 

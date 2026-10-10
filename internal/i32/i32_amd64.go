@@ -47,7 +47,8 @@ var hasAVX2 = cpu.X86.AVX2
 // recurrence kernel beats the scalar Go recurrence. The recurrence is serial
 // (each output feeds the next), so SIMD only helps once the per-output tap dot
 // product has enough work to amortize its horizontal reduction; below this the
-// scalar path wins. Tuned from the benchmarks.
+// scalar path wins. Tuned from the benchmarks. Orders 1..7 are routed to the
+// scalar kernels before dispatch (see LPCRestore).
 const minLPCRestoreOrder = 8
 
 func addI32(dst, a, b []int32) {
