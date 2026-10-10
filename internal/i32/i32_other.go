@@ -8,6 +8,10 @@ package i32
 // kernels are not measured here.
 const maxScalarRestoreOrder = 7
 
+// firstSIMDRestoreOrder backs FirstSIMDRestoreOrder: there is no SIMD restore
+// kernel on these builds (lpcRestoreI32 is lpcRestoreGo).
+func firstSIMDRestoreOrder() int { return 0 }
+
 func interleave2I32(dst, a, b []int32)   { interleave2Go(dst, a, b) }
 func deinterleave2I32(a, b, src []int32) { deinterleave2Go(a, b, src) }
 

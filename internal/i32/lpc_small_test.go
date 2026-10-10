@@ -277,6 +277,17 @@ func TestLPCRestoreSmallOrder_Random(t *testing.T) {
 	}
 }
 
+// TestFirstSIMDRestoreOrder_ContiguousWithScalarCeiling pins that the scalar
+// route and the SIMD range leave no gap and do not overlap: the SIMD range
+// starts right after the scalar ceiling, or does not exist (0).
+func TestFirstSIMDRestoreOrder_ContiguousWithScalarCeiling(t *testing.T) {
+	first := FirstSIMDRestoreOrder()
+	if first != 0 && (first != maxScalarRestoreOrder+1 || first > maxLPCRestoreOrder) {
+		t.Fatalf("FirstSIMDRestoreOrder() = %d, want 0 or %d (<= %d)",
+			first, maxScalarRestoreOrder+1, maxLPCRestoreOrder)
+	}
+}
+
 // TestLPCRestoreDispatch_ParityWithGo is untagged and goes through the public
 // LPCRestore, so it covers the per-architecture scalar routing and lpcRestoreI32 on
 // every build variant (amd64, arm64 and the generic fallback). Under

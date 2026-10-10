@@ -39,6 +39,16 @@ const maxLPCShift = 63
 // above it fall back to the pure-Go recurrence.
 const maxLPCRestoreOrder = 32
 
+// FirstSIMDRestoreOrder returns the smallest predictor order LPCRestore
+// dispatches to a SIMD decode kernel (AVX2 on amd64, NEON on arm64) on this
+// build and CPU; every order from it through maxLPCRestoreOrder takes the
+// SIMD kernel when the block is longer than the order (otherwise LPCRestore
+// copies the residual). It returns 0 when no order does: builds without a SIMD restore
+// kernel, or a CPU (or GODEBUG setting) without the required feature. It is
+// derived from the same constants and CPU flag LPCRestore routes on, so tests
+// can assert their reach against it.
+func FirstSIMDRestoreOrder() int { return firstSIMDRestoreOrder() }
+
 // LPCResidualEncode writes the quantized-LPC residual into res:
 //
 //	res[i] = samples[i]                                              for i < order

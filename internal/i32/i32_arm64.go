@@ -147,6 +147,15 @@ const maxScalarRestoreOrder = 5
 // would take the slower lpcRestoreGo.
 const _ = uint(maxScalarRestoreOrder + 1 - minNEONRestoreOrder)
 
+// firstSIMDRestoreOrder backs FirstSIMDRestoreOrder: NEON takes orders
+// [max(minNEONRestoreOrder, maxScalarRestoreOrder+1), maxLPCRestoreOrder].
+func firstSIMDRestoreOrder() int {
+	if !hasNEON {
+		return 0
+	}
+	return max(minNEONRestoreOrder, maxScalarRestoreOrder+1)
+}
+
 func lpcResidualEncodeI32(res, samples, coeffs []int32, shift uint) {
 	if hasNEON && len(res)-len(coeffs) >= minNEONElements {
 		lpcResidualEncodeNEON(res, samples, coeffs, shift)
