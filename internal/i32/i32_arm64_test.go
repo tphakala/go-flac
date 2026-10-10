@@ -621,3 +621,31 @@ func TestLPCRestoreNEON_LowOrderParity(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstSIMDRestoreOrder_MatchesNEONDispatch checks FirstSIMDRestoreOrder
+// against the routing condition LPCRestore and lpcRestoreI32 apply, both with
+// the detected NEON flag and with it forced off.
+func TestFirstSIMDRestoreOrder_MatchesNEONDispatch(t *testing.T) {
+	check := func(t *testing.T) {
+		t.Helper()
+		first := FirstSIMDRestoreOrder()
+		for order := 1; order <= maxLPCRestoreOrder; order++ {
+			wantSIMD := order > maxScalarRestoreOrder && hasNEON &&
+				order >= minNEONRestoreOrder && order <= maxLPCRestoreOrder
+			if gotSIMD := first != 0 && order >= first; gotSIMD != wantSIMD {
+				t.Fatalf("order %d: SIMD=%v, router says %v (first=%d, hasNEON=%v)",
+					order, gotSIMD, wantSIMD, first, hasNEON)
+			}
+		}
+	}
+	t.Run("detected", check)
+	t.Run("neon off", func(t *testing.T) {
+		saved := hasNEON
+		hasNEON = false
+		t.Cleanup(func() { hasNEON = saved })
+		if got := FirstSIMDRestoreOrder(); got != 0 {
+			t.Fatalf("FirstSIMDRestoreOrder() = %d with NEON off, want 0", got)
+		}
+		check(t)
+	})
+}

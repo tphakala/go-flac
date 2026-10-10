@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tphakala/go-flac/internal/bitio"
+	"github.com/tphakala/go-flac/internal/i32"
 )
 
 // decodeOneSubframe64 decodes a subframe through the int64 wide path. That path
@@ -27,7 +28,7 @@ func decodeOneSubframe64(t *testing.T, raw []byte, n, bps int) []int64 {
 // The two must agree sample-for-sample and both must reconstruct the original
 // samples. This pins the wired int32 restore path bit-exact to the scalar
 // reference across FIXED orders 0..4 and LPC orders on both sides of the
-// scalar/SIMD cutover (tonal signals select high-order LPC).
+// scalar/SIMD cutover where the build and CPU have one (tonal signals select high-order LPC).
 func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 	const n = 4096
 	// Signals are amplitude-normalized to func(i, amp); the caller scales amp to
@@ -88,13 +89,18 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 			}
 		}
 	}
-	// Guard the test's own reach: if signal selection drifts so the SIMD LPC
-	// kernel (orders above the per-architecture scalar ceiling) or the fixed path is no longer exercised, this parity
-	// test would silently stop covering the wired code.
+	// Guard the test's own reach: if signal selection drifts so the fixed path or
+	// the SIMD LPC restore kernel (orders from i32.FirstSIMDRestoreOrder, which
+	// tracks the per-architecture scalar ceiling and CPU features) is no longer
+	// exercised, this parity test would silently stop covering the wired code.
 	if !sawFixed {
 		t.Fatal("no FIXED subframe exercised; parity test lost fixed-restore coverage")
 	}
-	if maxLPCOrder < 8 {
-		t.Fatalf("max LPC order %d < 8; parity test never hit the SIMD LPC kernel gate", maxLPCOrder)
+	first := i32.FirstSIMDRestoreOrder()
+	if first == 0 {
+		t.Skip("no SIMD LPC restore kernel on this build or CPU; parity checked, SIMD reach guard skipped")
+	}
+	if maxLPCOrder < first {
+		t.Fatalf("max LPC order %d < %d; parity test never reached the SIMD LPC restore kernel", maxLPCOrder, first)
 	}
 }

@@ -612,3 +612,31 @@ func BenchmarkLPCRestoreAVX2Order(b *testing.B) {
 		})
 	}
 }
+
+// TestFirstSIMDRestoreOrder_MatchesAVX2Dispatch checks FirstSIMDRestoreOrder
+// against the routing condition LPCRestore and lpcRestoreI32 apply, both with
+// the detected AVX2 flag and with it forced off.
+func TestFirstSIMDRestoreOrder_MatchesAVX2Dispatch(t *testing.T) {
+	check := func(t *testing.T) {
+		t.Helper()
+		first := FirstSIMDRestoreOrder()
+		for order := 1; order <= maxLPCRestoreOrder; order++ {
+			wantSIMD := order > maxScalarRestoreOrder && hasAVX2 &&
+				order >= minLPCRestoreOrder && order <= maxLPCRestoreOrder
+			if gotSIMD := first != 0 && order >= first; gotSIMD != wantSIMD {
+				t.Fatalf("order %d: SIMD=%v, router says %v (first=%d, hasAVX2=%v)",
+					order, gotSIMD, wantSIMD, first, hasAVX2)
+			}
+		}
+	}
+	t.Run("detected", check)
+	t.Run("avx2 off", func(t *testing.T) {
+		saved := hasAVX2
+		hasAVX2 = false
+		t.Cleanup(func() { hasAVX2 = saved })
+		if got := FirstSIMDRestoreOrder(); got != 0 {
+			t.Fatalf("FirstSIMDRestoreOrder() = %d with AVX2 off, want 0", got)
+		}
+		check(t)
+	})
+}

@@ -61,6 +61,15 @@ const maxScalarRestoreOrder = 10
 // would take the slower lpcRestoreGo.
 const _ = uint(maxScalarRestoreOrder + 1 - minLPCRestoreOrder)
 
+// firstSIMDRestoreOrder backs FirstSIMDRestoreOrder: AVX2 takes orders
+// [max(minLPCRestoreOrder, maxScalarRestoreOrder+1), maxLPCRestoreOrder].
+func firstSIMDRestoreOrder() int {
+	if !hasAVX2 {
+		return 0
+	}
+	return max(minLPCRestoreOrder, maxScalarRestoreOrder+1)
+}
+
 func addI32(dst, a, b []int32) {
 	if hasAVX2 && len(dst) >= minAVXElements {
 		addAVX2(dst, a, b)
