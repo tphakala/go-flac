@@ -5,7 +5,7 @@
 #     settings block (no structured logger; gosec not enabled)
 #   - kept gocritic's ruleguard wired to rules/*.go for modern-Go patterns
 #   - modernize is enabled: the golangci-lint v2.11.4 panic on Go 1.26 +
-#     atomic types no longer reproduces on v2.13.2, and its min/max-builtin
+#     atomic types no longer reproduces on v2.14.0, and its min/max-builtin
 #     and range-over-int suggestions fit this codebase's modern-Go stance
 version: "2"
 output:
