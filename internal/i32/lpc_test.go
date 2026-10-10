@@ -78,17 +78,22 @@ func lpcRestoreOracle(out, residual, coeffs []int32, shift uint) {
 // include inputs at or below the predictor order (all warm-up, Go path).
 var lpcSizes = []int{1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 100, 1000, 1024, 1025}
 
-// lpcCoeffSets are representative quantized-LPC coefficient vectors. Orders span
-// 1..32 (FLAC's range), values stay within ~15-bit qlp precision, and the signs
-// vary so the int64 accumulation and the >>shift sign handling are exercised.
+// lpcCoeffSets are representative quantized-LPC coefficient vectors: every order
+// 1..8, then 12 and 32 (FLAC's range is 1..32). Values stay within ~15-bit qlp
+// precision, and the signs vary so the int64 accumulation and the >>shift sign
+// handling are exercised.
 func lpcCoeffSets() [][]int32 {
 	// An order-12 and an order-32 set with alternating-sign, decaying magnitudes.
 	orders := []int{12, 32}
-	sets := make([][]int32, 0, 4+len(orders))
+	sets := make([][]int32, 0, 8+len(orders))
 	sets = append(sets,
 		[]int32{4096},
 		[]int32{7000, -3000},
+		[]int32{7500, -4200, 900},
 		[]int32{8000, -5000, 2000, -512},
+		[]int32{8000, -6000, 3000, -1500, 400},
+		[]int32{7000, -5000, 3500, -2000, 900, -250},
+		[]int32{6500, -4500, 3200, -2100, 1400, -800, 300},
 		[]int32{6000, -4000, 3000, -2000, 1500, -1000, 700, -300},
 	)
 	for _, order := range orders {
