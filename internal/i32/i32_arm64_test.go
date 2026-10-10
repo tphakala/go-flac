@@ -584,7 +584,7 @@ func BenchmarkLPCRestoreNEONOrder(b *testing.B) {
 }
 
 // TestLPCRestoreNEON_LowOrderParity pins the NEON kernel at orders 2..7, which
-// reach below minNEONRestoreOrder and so are not covered by
+// include orders below minNEONRestoreOrder that are not covered by
 // TestLPCRestoreNEON_ParityWithGo, over the int32 extreme coefficient families, every
 // shift, two-buffer and exact in-place.
 func TestLPCRestoreNEON_LowOrderParity(t *testing.T) {

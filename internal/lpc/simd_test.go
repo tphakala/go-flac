@@ -165,7 +165,7 @@ func TestRestoreFixed32Parity(t *testing.T) {
 // TestRestoreLPC32Parity proves the in-place SIMD RestoreLPC32 reconstructs a
 // subframe bit-identically to the scalar RestoreLPC (int64 accumulate, arithmetic
 // >>shift of the full sum, int32-truncated wraparound add) for every input,
-// across orders 1..32 (straddling the SIMD gate at 8), the shift range FLAC
+// across orders 1..32 (straddling the scalar/SIMD cutover on every architecture), the shift range FLAC
 // emits, lengths at and beyond the order, and full-range magnitudes.
 func TestRestoreLPC32Parity(t *testing.T) {
 	rng := rand.New(rand.NewSource(0x2f5e))

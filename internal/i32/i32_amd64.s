@@ -760,7 +760,7 @@ lpcenc_done:
 // leaves vecTaps = order - scalarTaps (a multiple of 8) for the vector loop,
 // whose oldest samples have long since drained to L1. This is ~3x faster on the
 // order-is-a-multiple-of-8 cases than a naive order/8 split.
-// The dispatch gates order in [minLPCRestoreOrder, 32] and n-order >= 1.
+// The dispatch gates order in [max(minLPCRestoreOrder, maxScalarRestoreOrder+1), 32] and n-order >= 1.
 TEXT ·lpcRestoreAVX2(SB), NOSPLIT, $0-80
     MOVQ out_base+0(FP), R8
     MOVQ out_len+8(FP), R12          // n
