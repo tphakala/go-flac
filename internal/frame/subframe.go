@@ -172,8 +172,8 @@ func restoreFixed[T rice.Sample](dst []T, order int) {
 
 // restoreLPC reconstructs the subframe in place from its quantized-LPC residual.
 // The int32 path dispatches to the SIMD i32.LPCRestore kernel via
-// lpc.RestoreLPC32 (SIMD kernel where one exists above the per-architecture
-// scalar ceiling, specialized scalar kernels below); the int64 wide path keeps
+// lpc.RestoreLPC32 (specialized scalar kernels for small orders, the SIMD
+// kernel above a per-architecture cutover where one exists); the int64 wide path keeps
 // the scalar lpc.RestoreLPC. The type assertion never escapes, so it does not
 // allocate.
 func restoreLPC[T rice.Sample](dst []T, coeffs []int32, shift, order int) {

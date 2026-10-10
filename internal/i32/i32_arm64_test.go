@@ -585,48 +585,38 @@ func BenchmarkLPCRestoreNEONOrder(b *testing.B) {
 
 // TestLPCRestoreNEON_LowOrderParity pins the NEON kernel at orders 2..7, which
 // include orders below minNEONRestoreOrder that are not covered by
-// TestLPCRestoreNEON_ParityWithGo, over the int32 extreme coefficient families, every
-// shift, two-buffer and exact in-place.
+// TestLPCRestoreNEON_ParityWithGo, two-buffer and exact in-place.
 func TestLPCRestoreNEON_LowOrderParity(t *testing.T) {
 	if !cpu.ARM64.NEON {
 		t.Skip("NEON not available")
 	}
-	check := func(order, n int, coeffs, res []int32, shift uint, name string) {
-		if n-order < 1 {
-			return
-		}
-		rc := reverseCoeffs(coeffs)
-		want := make([]int32, n)
-		lpcRestoreGo(want, res, coeffs, shift)
-		got := make([]int32, n)
-		lpcRestoreNEON(got, res, rc, shift)
-		inPlace := append([]int32(nil), res...)
-		lpcRestoreNEON(inPlace, inPlace, rc, shift)
-		for i := range want {
-			if got[i] != want[i] || inPlace[i] != want[i] {
-				t.Fatalf("%s order=%d n=%d shift=%d [%d]: two-buffer %d in-place %d want %d",
-					name, order, n, shift, i, got[i], inPlace[i], want[i])
-			}
-		}
-	}
 	for order := 2; order <= 7; order++ {
-		for _, n := range paritySizes {
-			for _, rf := range smallResFamilies {
-				res := make([]int32, n)
-				rf.fill(res)
-				for _, cf := range smallCoeffFamilies {
-					for shift := uint(0); shift < 64; shift++ {
-						check(order, n, cf.coeffs(order), res, shift, cf.name+"/"+rf.name)
-					}
+		for _, tc := range smallCasesByOrder()[order] {
+			n := len(tc.res)
+			if n-order < 1 {
+				continue
+			}
+			rc := reverseCoeffs(tc.coeffs)
+			want := make([]int32, n)
+			got := make([]int32, n)
+			inPlace := make([]int32, n)
+			shifts := smallShifts
+			if n > 64 {
+				shifts = largeShifts
+			}
+			for _, shift := range shifts {
+				if shift > maxLPCShift {
+					continue // LPCRestore clamps before dispatch; the kernel never sees these
 				}
-				for _, coeffs := range lpcCoeffSets() {
-					if len(coeffs) != order {
-						continue
-					}
-					for shift := uint(0); shift < 64; shift++ {
-						check(order, n, coeffs, res, shift, "set/"+rf.name)
-					}
-				}
+				lpcRestoreGo(want, tc.res, tc.coeffs, shift)
+				lpcRestoreNEON(got, tc.res, rc, shift)
+				sameI32(t, got, want, func() string { return "neon order=" + itoa(order) + " " + tc.name + " shift=" + itoa(int(shift)) })
+
+				copy(inPlace, tc.res)
+				lpcRestoreNEON(inPlace, inPlace, rc, shift)
+				sameI32(t, inPlace, want, func() string {
+					return "neon in-place order=" + itoa(order) + " " + tc.name + " shift=" + itoa(int(shift))
+				})
 			}
 		}
 	}

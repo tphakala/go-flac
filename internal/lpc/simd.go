@@ -93,10 +93,9 @@ func RestoreFixed32(dst []int32, order int) {
 // It dispatches to the SIMD i32.LPCRestore kernel (AVX2/NEON/pure Go), which
 // accumulates the prediction in int64, arithmetic-shifts the full sum before
 // narrowing to int32, and adds with int32 wraparound, bit-identical to
-// RestoreLPC. Orders above the per-architecture scalar ceiling
-// (i32.maxScalarRestoreOrder) use the SIMD kernel where one exists (AVX2, NEON)
-// and the pure-Go recurrence otherwise; lower orders take specialized scalar
-// kernels. It runs safely in place (dst aliases the residual).
+// RestoreLPC. Small orders take specialized scalar kernels; higher
+// orders use the SIMD kernel where one exists (AVX2, NEON) and the pure-Go
+// recurrence otherwise. The cutover is per architecture. It runs safely in place (dst aliases the residual).
 func RestoreLPC32(dst, coeffs []int32, shift int) {
 	i32.LPCRestore(dst, dst, coeffs, uint(shift))
 }

@@ -86,16 +86,15 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 	if n == 0 {
 		return
 	}
-	if order := len(coeffs); order == 0 || order >= n {
+	order := len(coeffs)
+	if order == 0 || order >= n {
 		copy(out[:n], residual[:n])
 		return
 	}
 	if shift > maxLPCShift {
 		shift = maxLPCShift
 	}
-	if order := len(coeffs); order <= maxScalarRestoreOrder {
-		// The per-architecture ceiling is tuned so the scalar kernels beat
-		// the SIMD dispatch at and below it.
+	if order <= maxScalarRestoreOrder {
 		lpcRestoreScalar(out[:n], residual[:n], coeffs, shift)
 		return
 	}
