@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// Tests for the int32-accumulating restore (LPCRestoreNarrow, lpcRestoreScalarNarrow)
-// and its safety predicate. lpcRestoreGo (int64 accumulation) is the reference.
+// Tests for the int32-accumulating restore (LPCRestoreNarrow, lpcRestoreScalarNarrow,
+// lpcRestoreGoNarrow) and its safety predicate. lpcRestoreGo (int64 accumulation) is the reference.
 
 func TestLPCRestoreNarrowSafe_MatchesLibFLAC(t *testing.T) {
 	neg := func(n int, v int32) []int32 {
@@ -71,7 +71,7 @@ func TestLPCRestoreNarrowSafe_MatchesLibFLAC(t *testing.T) {
 // predicate-edge tests cover.
 var (
 	narrowEdgeBps    = []uint{8, 15, 16, 17, 20, 24, 25}
-	narrowEdgeOrders = []int{1, 2, 4, 7, 8, 12, 13, 32}
+	narrowEdgeOrders = []int{1, 2, 3, 4, 7, 8, 12, 13, 16, 19, 20, 31, 32}
 )
 
 // splitNeg returns order negative coefficients whose absolute values sum to a.
@@ -98,9 +98,13 @@ func constantSignal(n int, v int32) []int32 {
 }
 
 // narrowKernelsFor returns every narrow restore this build has for order:
-// the public entry and, when a specialized kernel exists, the direct one.
+// the public entry, the generic loop and, when a specialized kernel exists, the
+// direct one.
 func narrowKernelsFor(order int) map[string]func(out, res, coeffs []int32, shift uint) {
-	k := map[string]func(out, res, coeffs []int32, shift uint){"LPCRestoreNarrow": LPCRestoreNarrow}
+	k := map[string]func(out, res, coeffs []int32, shift uint){
+		"LPCRestoreNarrow":   LPCRestoreNarrow,
+		"lpcRestoreGoNarrow": lpcRestoreGoNarrow,
+	}
 	if order <= maxScalarKernelOrderNarrow {
 		k["lpcRestoreScalarNarrow"] = lpcRestoreScalarNarrow
 	}
@@ -159,11 +163,18 @@ func TestLPCRestoreNarrow_EdgeOfPredicate(t *testing.T) {
 					t.Errorf("bps=%d order=%d: narrow kernel did not wrap past the edge (got[%d]=%d)", bps, order, order, got[order])
 				}
 			}
+			// The generic loop accumulates in int32 at every order; one that
+			// widened to int64 would pass every other test.
+			gen := make([]int32, len(res))
+			lpcRestoreGoNarrow(gen, res, coeffs, narrowEdgeShift)
+			if gen[order] == samples[order] {
+				t.Errorf("bps=%d order=%d: generic narrow loop did not wrap past the edge (got[%d]=%d)", bps, order, order, gen[order])
+			}
 			// The public entry wraps exactly for the orders it routes to the
 			// narrow kernels and matches the int64 route above them. The
 			// ceiling is a per-architecture literal (wantMaxScalarRestoreOrderNarrow,
-			// pinned in the arch test files), and the orders 7, 8, 12 and 13
-			// straddle the ceilings.
+			// pinned in the arch test files), and the orders 2, 3, 7, 8, 12, 13
+			// and 32 straddle the ceilings.
 			got := make([]int32, len(res))
 			LPCRestoreNarrow(got, res, coeffs, narrowEdgeShift)
 			if narrow := order <= wantMaxScalarRestoreOrderNarrow; narrow == (got[order] == samples[order]) {
@@ -283,6 +294,38 @@ func TestLPCRestoreScalarNarrow_MatchesGo(t *testing.T) {
 	})
 }
 
+func TestLPCRestoreGoNarrow_MatchesGo(t *testing.T) {
+	forEachNarrowCase(t, func(c narrowCase, order int) {
+		n := len(c.res)
+		label := func() string {
+			return "lpcRestoreGoNarrow bps=" + itoa(int(c.bps)) + " order=" + itoa(order) + " n=" + itoa(n) + " shift=" + itoa(int(c.shift))
+		}
+		got := make([]int32, n)
+		lpcRestoreGoNarrow(got, c.res, c.coeffs, c.shift)
+		sameI32(t, got, c.samples, label)
+
+		inPlace := slices.Clone(c.res)
+		lpcRestoreGoNarrow(inPlace, inPlace, c.coeffs, c.shift)
+		sameI32(t, inPlace, c.samples, func() string { return "in-place " + label() })
+	})
+}
+
+// TestLPCRestoreGoNarrow_FallsBackOutsideRange pins that orders 0 and above
+// maxLPCRestoreOrder restore like LPCRestore when the generic loop is called
+// directly.
+func TestLPCRestoreGoNarrow_FallsBackOutsideRange(t *testing.T) {
+	r := rand.New(rand.NewPCG(41, 43))
+	for _, order := range []int{0, maxLPCRestoreOrder + 1} {
+		c := randomNarrowCase(r, 16, max(order, 1), 200, 12)
+		coeffs := c.coeffs[:order]
+		want := make([]int32, len(c.res))
+		LPCRestore(want, c.res, coeffs, 12)
+		got := make([]int32, len(c.res))
+		lpcRestoreGoNarrow(got, c.res, coeffs, 12)
+		equalI32(t, "lpcRestoreGoNarrow order="+itoa(order), got, want)
+	}
+}
+
 func TestLPCRestoreNarrow_InPlace(t *testing.T) {
 	forEachNarrowCase(t, func(c narrowCase, order int) {
 		got := slices.Clone(c.res)
@@ -294,9 +337,12 @@ func TestLPCRestoreNarrow_InPlace(t *testing.T) {
 }
 
 // narrowProbeOrders returns the highest narrow-routed order, the first order
-// above it (which runs LPCRestore) and 32.
+// above it (which runs LPCRestore, when there is one), the first order above the
+// unrolled kernels (which runs the generic loop where the ceiling allows) and 32.
 func narrowProbeOrders() []int {
-	return []int{maxScalarRestoreOrderNarrow, maxScalarRestoreOrderNarrow + 1, maxLPCRestoreOrder}
+	orders := []int{maxScalarRestoreOrderNarrow, min(maxScalarRestoreOrderNarrow+1, maxLPCRestoreOrder), maxScalarKernelOrderNarrow + 1, maxLPCRestoreOrder}
+	slices.Sort(orders)
+	return slices.Compact(orders)
 }
 
 func TestLPCRestoreNarrow_NoOverwrite(t *testing.T) {
@@ -339,6 +385,17 @@ func TestLPCRestoreNarrow_AllocFree(t *testing.T) {
 	}
 }
 
+// TestLPCRestoreGoNarrow_AllocFree pins the stack reversal of the coefficients
+// on every architecture, including those that never route to the generic loop.
+func TestLPCRestoreGoNarrow_AllocFree(t *testing.T) {
+	r := rand.New(rand.NewPCG(17, 19))
+	c := randomNarrowCase(r, 16, maxLPCRestoreOrder, 1024, 12)
+	out := make([]int32, 1024)
+	if got := testing.AllocsPerRun(50, func() { lpcRestoreGoNarrow(out, c.res, c.coeffs, 12) }); got != 0 {
+		t.Errorf("lpcRestoreGoNarrow order=%d allocated %v times per run, want 0", maxLPCRestoreOrder, got)
+	}
+}
+
 // TestLPCRestoreNarrow_NoPanicOnHostileInput feeds full-range coefficients and
 // residuals, for which the predicate does not hold, and checks only that the
 // result has the right length and nothing panics.
@@ -358,6 +415,7 @@ func TestLPCRestoreNarrow_NoPanicOnHostileInput(t *testing.T) {
 		shift := uint(r.IntN(80))
 		out := make([]int32, n)
 		LPCRestoreNarrow(out, res, coeffs, shift)
+		lpcRestoreGoNarrow(out, res, coeffs, shift%32)
 	}
 }
 

@@ -17,7 +17,7 @@ package i32
 
 // maxScalarKernelOrder is the largest order with a specialized kernel. Which of
 // these orders LPCRestore routes here is per architecture: maxScalarRestoreOrder
-// in i32_amd64.go, i32_arm64.go and i32_other.go.
+// in i32_amd64.go, i32_arm64.go, restore_order_arm.go and restore_order_other.go.
 const maxScalarKernelOrder = 10
 
 // A routing ceiling above the kernels that exist would not compile.

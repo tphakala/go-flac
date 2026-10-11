@@ -163,8 +163,10 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 // from LPCRestore, but it never panics or accesses memory out of bounds. It has
 // the same n clamp, order == 0 / order >= n copy and aliasing contract as
 // LPCRestore. Orders up to the per-architecture ceiling maxScalarRestoreOrderNarrow
-// run the int32 scalar kernels (lpc_small_narrow.go); every other order runs
-// LPCRestore, because no narrow SIMD kernel beat the int64 one in measurement.
+// run int32 code (lpc_small_narrow.go): the unrolled kernels through
+// maxScalarKernelOrderNarrow and the generic loop lpcRestoreGoNarrow above them.
+// Every other order runs LPCRestore, because no narrow SIMD kernel beat the int64
+// one in measurement.
 func LPCRestoreNarrow(out, residual, coeffs []int32, shift uint) {
 	n := min(len(out), len(residual))
 	if n == 0 {
@@ -176,7 +178,12 @@ func LPCRestoreNarrow(out, residual, coeffs []int32, shift uint) {
 		return
 	}
 	if order <= maxScalarRestoreOrderNarrow {
-		lpcRestoreScalarNarrow(out[:n], residual[:n], coeffs, min(shift, maxLPCShiftNarrow))
+		shift = min(shift, maxLPCShiftNarrow)
+		if order <= maxScalarKernelOrderNarrow {
+			lpcRestoreScalarNarrow(out[:n], residual[:n], coeffs, shift)
+		} else {
+			lpcRestoreGoNarrow(out[:n], residual[:n], coeffs, shift)
+		}
 		return
 	}
 	LPCRestore(out[:n], residual[:n], coeffs, shift)

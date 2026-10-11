@@ -464,13 +464,14 @@ func benchNarrowResidual(b *testing.B, order, n int) (res, coeffs []int32) {
 }
 
 // benchNarrowOrders are the orders the narrow routing benchmarks cover.
-var benchNarrowOrders = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20, 24, 32}
+var benchNarrowOrders = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 28, 32}
 
 // BenchmarkLPCRestoreNarrowOrder compares the int64 restore (wide) with the
 // int32-accumulating one on identical predicate-satisfying 16-bit data, per
 // order: "wide" is LPCRestore, "narrow" the public LPCRestoreNarrow (whatever it
 // routes), "narrow_scalar" the specialized kernel directly (orders up to
-// maxScalarKernelOrderNarrow), and n4096 the usual FLAC block size.
+// maxScalarKernelOrderNarrow), "narrow_generic" the generic int32 loop at every
+// order, and n4096 the usual FLAC block size.
 func BenchmarkLPCRestoreNarrowOrder(b *testing.B) {
 	for _, order := range benchNarrowOrders {
 		res, coeffs := benchNarrowResidual(b, order, benchN)
@@ -498,6 +499,18 @@ func BenchmarkLPCRestoreNarrowOrder(b *testing.B) {
 				}
 			})
 		}
+		b.Run(name+"/narrow_generic", func(b *testing.B) {
+			b.SetBytes(benchN * 4 * 2)
+			for b.Loop() {
+				lpcRestoreGoNarrow(dst, res, coeffs, 12)
+			}
+		})
+		b.Run(name+"/n4096/narrow_generic", func(b *testing.B) {
+			b.SetBytes(4096 * 4 * 2)
+			for b.Loop() {
+				lpcRestoreGoNarrow(dst4096, res4096, coeffs, 12)
+			}
+		})
 		b.Run(name+"/n4096/wide", func(b *testing.B) {
 			b.SetBytes(4096 * 4 * 2)
 			for b.Loop() {
