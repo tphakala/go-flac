@@ -127,7 +127,7 @@ func (r sideNarrowRow) buildFrame(assignment, chCode int) []byte {
 // channel carries on its way to the narrow-restore predicate. Each frame is
 // left/side, right/side or mid/side, with a side LPC subframe whose coefficient
 // sum passes i32.LPCRestoreNarrowSafe at the frame bit depth but fails it at
-// bps+1. The side samples sit at the minimum of the (bps+1)-bit range, so an
+// bps+1. The side samples sit one above the minimum of the (bps+1)-bit range, so an
 // int32 accumulator would wrap; only a predicate that sees bps+1 routes the
 // subframe to the int64 restore and recovers the known left and right samples.
 // Valid corpus data never wraps, so only crafted data like this separates the
