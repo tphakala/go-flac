@@ -116,7 +116,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        goarch: [amd64, arm64]
+        goarch: [amd64, arm64, arm, '386']
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -129,6 +129,7 @@ jobs:
       - name: Run go vet
         env:
           GOARCH: ${{ matrix.goarch }}
+          GOARM: '7'
         run: go vet ./...
 
   build:

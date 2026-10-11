@@ -5,22 +5,25 @@ package i32
 // same recurrence as lpcRestoreScalar but multiply and add in int32, so they are
 // bit-exact with it only under the LPCRestoreNarrowSafe precondition (the sum of
 // |coeff| * 2^(bps-1) fits in int32 for every in-range history). The aliasing
-// contract is the same: out and residual may be the same slice. The shift passed
-// in must already be clamped to maxLPCShiftNarrow; the &31 in the loops only tells
-// the compiler the count is in range.
+// contract is the same: out and residual may be the same slice. The two entry
+// points lpcRestoreScalarNarrow and lpcRestoreGoNarrow clamp the shift to
+// maxLPCShiftNarrow; the per-order kernels below need it already clamped, and the
+// &31 in their loops only tells the compiler the count is in range. Orders 1..maxScalarKernelOrderNarrow have an
+// unrolled kernel; a per-architecture ceiling above that runs lpcRestoreGoNarrow.
 
 // maxScalarKernelOrderNarrow is the largest order with a specialized narrow
-// kernel. Which of these orders LPCRestoreNarrow routes here is per architecture:
-// maxScalarRestoreOrderNarrow in i32_amd64.go, i32_arm64.go and i32_other.go.
+// kernel. Which orders LPCRestoreNarrow routes to int32 code is per architecture:
+// maxScalarRestoreOrderNarrow in i32_amd64.go, i32_arm64.go, restore_order_arm.go
+// and restore_order_other.go.
 const maxScalarKernelOrderNarrow = 12
 
-// A routing ceiling above the kernels that exist would not compile.
-const _ = uint(maxScalarKernelOrderNarrow - maxScalarRestoreOrderNarrow)
+// A routing ceiling above what lpcRestoreGoNarrow handles would not compile.
+const _ = uint(maxLPCRestoreOrder - maxScalarRestoreOrderNarrow)
 
 // lpcRestoreScalarNarrow restores with the specialized narrow kernel for orders
 // 1..maxScalarKernelOrderNarrow. Other orders run LPCRestore, so a direct call
-// never lands on the generic loop when a faster int64 kernel exists. shift must be
-// at most maxLPCShiftNarrow.
+// never lands on the generic loop when a faster int64 kernel exists. A larger shift
+// is clamped to maxLPCShiftNarrow for the orders it serves.
 func lpcRestoreScalarNarrow(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
 	if order < 1 || order > maxScalarKernelOrderNarrow {
@@ -32,6 +35,7 @@ func lpcRestoreScalarNarrow(out, residual, coeffs []int32, shift uint) {
 		copy(out, residual[:n])
 		return
 	}
+	shift = min(shift, maxLPCShiftNarrow)
 	copy(out[:order], residual[:order])
 	hist := out[:order]
 	res := residual[order:n]
@@ -242,5 +246,39 @@ func lpcRestoreNarrow12(dst, res, coeffs, hist []int32, shift uint) {
 		v := r + acc>>(shift&31)
 		dst[i] = v
 		x12, x11, x10, x9, x8, x7, x6, x5, x4, x3, x2, x1 = x11, x10, x9, x8, x7, x6, x5, x4, x3, x2, x1, v
+	}
+}
+
+// lpcRestoreGoNarrow is the generic int32-accumulating restore for any order
+// 1..maxLPCRestoreOrder, used by LPCRestoreNarrow above the unrolled kernels
+// where the architecture's ceiling allows it (32-bit ARM). The contract is that
+// of lpcRestoreScalarNarrow, including the shift clamp. The coefficients are reversed once into a stack
+// array so the tap loop walks a forward window of out.
+func lpcRestoreGoNarrow(out, residual, coeffs []int32, shift uint) {
+	order := len(coeffs)
+	if order < 1 || order > maxLPCRestoreOrder {
+		LPCRestore(out, residual, coeffs, shift)
+		return
+	}
+	n := len(out)
+	if n <= order {
+		copy(out, residual[:n])
+		return
+	}
+	shift = min(shift, maxLPCShiftNarrow)
+	copy(out[:order], residual[:order])
+	var rc [maxLPCRestoreOrder]int32
+	for k := range order {
+		rc[k] = coeffs[order-1-k]
+	}
+	rcs := rc[:order]
+	for i := order; i < n; i++ {
+		w := out[i-order : i]
+		w = w[:len(rcs)]
+		var acc int32
+		for k, c := range rcs {
+			acc += c * w[k]
+		}
+		out[i] = residual[i] + acc>>(shift&31)
 	}
 }

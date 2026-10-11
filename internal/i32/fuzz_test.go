@@ -218,6 +218,10 @@ func FuzzI32LPCNarrow(f *testing.F) {
 			equalI32(t, "lpcRestoreScalarNarrow", out, samples)
 		}
 
+		clear(out)
+		lpcRestoreGoNarrow(out, res, coeffs, shift)
+		equalI32(t, "lpcRestoreGoNarrow", out, samples)
+
 		inPlace := slices.Clone(res)
 		LPCRestoreNarrow(inPlace, inPlace, coeffs, shift)
 		equalI32(t, "LPCRestoreNarrow in place", inPlace, samples)

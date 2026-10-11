@@ -161,6 +161,17 @@ const _ = uint(maxScalarRestoreOrder + 1 - minNEONRestoreOrder)
 // that exists (maxScalarKernelOrderNarrow). A NEON int32 kernel (MLA on .4S, one
 // and two accumulators) was also measured: it lost to the int64 NEON kernel at
 // orders 7-12 and did not win consistently above them, so there is none.
+//
+// Above 12 the int64 NEON kernel also beats the generic int32 loop
+// (lpcRestoreGoNarrow), so the ceiling stays at 12. Min of 10 runs, ns per 1000
+// samples, int64 LPCRestore / generic int32 loop:
+//
+//	order 13:  9925 / 14033    order 16:  9900 / 16457    order 19:  9884 / 18867
+//	order 14:  8277 / 14843    order 17: 10711 / 17262    order 32: 12996 / 29129
+//	order 15:  9086 / 15666    order 18:  9062 / 18066
+//
+// The generic loop is 41-124% slower from order 13 to 32 (p=0.000 at every
+// measured order for 1000 and 4096 samples).
 const maxScalarRestoreOrderNarrow = 12
 
 // firstSIMDRestoreOrder backs FirstSIMDRestoreOrder: NEON takes orders
