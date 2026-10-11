@@ -28,7 +28,8 @@ func decodeOneSubframe64(t *testing.T, raw []byte, n, bps int) []int64 {
 // The two must agree sample-for-sample and both must reconstruct the original
 // samples. This pins the wired int32 restore path bit-exact to the scalar
 // reference across FIXED orders 0..4 and LPC orders on both sides of the
-// scalar/SIMD cutover where the build and CPU have one (tonal signals select high-order LPC).
+// scalar/SIMD cutover where the build and CPU have one (tonal signals select high-order LPC),
+// on both the int64 and the int32-accumulating restore routes.
 func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 	const n = 4096
 	// Signals are amplitude-normalized to func(i, amp); the caller scales amp to
@@ -49,10 +50,27 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 		{"two-tone", func(i int, amp float64) int32 {
 			return int32(amp * (0.6*math.Sin(float64(i)*0.05) + 0.4*math.Sin(float64(i)*0.17)))
 		}},
+		// Several tones plus a little noise: at 24 bps this selects a high LPC
+		// order whose coefficients fail the narrow predicate, so it reaches the
+		// int64 SIMD restore kernel that the 16-bit signals (which pass it) no
+		// longer do.
+		{"multi-tone-noise", func(i int, amp float64) int32 {
+			x := uint32(i)*2654435761 ^ 0x9e3779b9
+			x ^= x >> 15
+			nz := float64(int32(x)) / float64(1<<31)
+			v := 0.0
+			for k := 1; k <= 7; k++ {
+				v += math.Sin(float64(i)*0.037*float64(k)+float64(k)) / float64(k+1)
+			}
+			return int32(amp * (0.3*v + 0.0005*nz))
+		}},
 	}
 	p := paramsLevel(t, 8) // LPC enabled, so tonal signals pick LPC
 	var sawFixed bool      // kind 2, order 1..4
-	var maxLPCOrder int    // kind 3
+	// Highest LPC order reached by subframes the decoder restores with int32
+	// accumulation (narrow) and with int64 accumulation (wide), classified by the
+	// predicate the decoder uses; -1 until one of that kind is seen.
+	maxNarrowOrder, maxWideOrder := -1, -1
 	for _, bps := range []int{16, 24} {
 		amp := float64(int32(1)<<(bps-1)) - 1 // peak magnitude that fits the bps range
 		for _, sig := range signals {
@@ -71,8 +89,13 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 			if plan.kind == 2 && plan.order >= 1 {
 				sawFixed = true
 			}
-			if plan.kind == 3 && plan.order > maxLPCOrder {
-				maxLPCOrder = plan.order
+			if plan.kind == 3 {
+				coeffs := plan.qcoeff[:plan.order]
+				if i32.LPCRestoreNarrowSafe(coeffs, uint(bps-plan.wasted), uint(plan.shift)) {
+					maxNarrowOrder = max(maxNarrowOrder, plan.order)
+				} else {
+					maxWideOrder = max(maxWideOrder, plan.order)
+				}
 			}
 
 			got32 := decodeOneSubframe(t, raw, n, bps)
@@ -92,15 +115,23 @@ func TestDecodeSubframeSIMDMatchesScalar(t *testing.T) {
 	// Guard the test's own reach: if signal selection drifts so the fixed path or
 	// the SIMD LPC restore kernel (orders from i32.FirstSIMDRestoreOrder, which
 	// tracks the per-architecture scalar ceiling and CPU features) is no longer
-	// exercised, this parity test would silently stop covering the wired code.
+	// exercised, this parity test would silently stop covering the wired code. The
+	// SIMD kernel is the int64 one, reached only by subframes that fail the narrow
+	// predicate, and the narrow route needs subframes that pass it.
 	if !sawFixed {
 		t.Fatal("no FIXED subframe exercised; parity test lost fixed-restore coverage")
+	}
+	if maxNarrowOrder < 0 || maxWideOrder < 0 {
+		t.Fatalf("LPC subframes: max narrow order %d, max wide order %d; the test must reach both restore routes", maxNarrowOrder, maxWideOrder)
+	}
+	if maxNarrowOrder < 1 {
+		t.Fatal("no narrow-eligible LPC subframe; parity test lost int32-accumulation coverage")
 	}
 	first := i32.FirstSIMDRestoreOrder()
 	if first == 0 {
 		t.Skip("no SIMD LPC restore kernel on this build or CPU; parity checked, SIMD reach guard skipped")
 	}
-	if maxLPCOrder < first {
-		t.Fatalf("max LPC order %d < %d; parity test never reached the SIMD LPC restore kernel", maxLPCOrder, first)
+	if maxWideOrder < first {
+		t.Fatalf("max wide LPC order %d < %d; parity test never reached the SIMD LPC restore kernel", maxWideOrder, first)
 	}
 }

@@ -162,6 +162,67 @@ func FuzzI32LPC(f *testing.F) {
 	})
 }
 
+// FuzzI32LPCNarrow drives the int32-accumulating restore with data that satisfies
+// its precondition: samples sign-extended to bps bits and coefficients whose
+// absolute sum is at most 2^(32-bps) - 2, which makes LPCRestoreNarrowSafe true
+// for every shift. The restore must then reproduce the samples exactly and match
+// the int64 reference. (FuzzI32LPC keeps testing the int64 path with full-range
+// data, which almost never satisfies the predicate.)
+func FuzzI32LPCNarrow(f *testing.F) {
+	addLenSeeds(f)
+	// Predicate-edge seeds: extreme samples with large same-sign coefficients.
+	f.Add([]byte{0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x7f, 0x01, 0x00, 0x00, 0x80, 0x07, 0x1f})
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00})
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		v := i32sFromBits(raw)
+		n := len(v)
+		if n < 3 {
+			return
+		}
+		maxOrder := min(n-1, maxLPCRestoreOrder)
+		order := 1 + int(raw[0])%maxOrder
+		bps := 1 + uint(raw[len(raw)-2])%25
+		shift := uint(raw[len(raw)-1]) % (maxLPCShiftNarrow + 1)
+
+		samples := make([]int32, n)
+		for i, x := range v {
+			samples[i] = x << (32 - bps) >> (32 - bps) // sign-extend to bps bits
+		}
+		budget := uint64(1)<<(32-bps) - 2
+		coeffs := make([]int32, order)
+		for j := range coeffs {
+			m := int64(uint64(uint32(v[j])>>1) % (budget/uint64(order) + 1))
+			if v[j]&1 != 0 {
+				m = -m
+			}
+			coeffs[j] = int32(m)
+		}
+		if !LPCRestoreNarrowSafe(coeffs, bps, shift) {
+			t.Fatalf("generated coefficients rejected: bps=%d shift=%d coeffs=%v", bps, shift, coeffs)
+		}
+
+		res := make([]int32, n)
+		lpcResidualEncodeGo(res, samples, coeffs, shift)
+
+		ref := make([]int32, n)
+		lpcRestoreGo(ref, res, coeffs, shift)
+		equalI32(t, "lpcRestoreGo", ref, samples)
+
+		out := make([]int32, n)
+		LPCRestoreNarrow(out, res, coeffs, shift)
+		equalI32(t, "LPCRestoreNarrow", out, samples)
+
+		if order <= maxScalarKernelOrderNarrow {
+			lpcRestoreScalarNarrow(out, res, coeffs, shift)
+			equalI32(t, "lpcRestoreScalarNarrow", out, samples)
+		}
+
+		inPlace := slices.Clone(res)
+		LPCRestoreNarrow(inPlace, inPlace, coeffs, shift)
+		equalI32(t, "LPCRestoreNarrow in place", inPlace, samples)
+	})
+}
+
 func FuzzI32Rice(f *testing.F) {
 	addLenSeeds(f)
 	f.Fuzz(func(t *testing.T, raw []byte) {
