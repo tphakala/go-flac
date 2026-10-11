@@ -434,3 +434,25 @@ func TestLPCRestoreScalarNarrow_FallsBackOutsideKernelRange(t *testing.T) {
 		equalI32(t, "lpcRestoreScalarNarrow order="+itoa(order), got, want)
 	}
 }
+
+// TestLPCRestoreNarrowKernels_ClampShift pins that the direct narrow entry
+// points clamp an oversized shift to maxLPCShiftNarrow instead of masking it:
+// data encoded at shift 31 must restore at shift 40, where masking would shift
+// by 8 and change every sum of 2^9 or more.
+func TestLPCRestoreNarrowKernels_ClampShift(t *testing.T) {
+	r := rand.New(rand.NewPCG(51, 53))
+	for _, order := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 32} {
+		c := randomNarrowCase(r, 16, order, 400, maxLPCShiftNarrow)
+		for name, f := range map[string]func(out, res, coeffs []int32, shift uint){
+			"lpcRestoreScalarNarrow": lpcRestoreScalarNarrow,
+			"lpcRestoreGoNarrow":     lpcRestoreGoNarrow,
+		} {
+			if name == "lpcRestoreScalarNarrow" && order > maxScalarKernelOrderNarrow {
+				continue
+			}
+			got := make([]int32, len(c.res))
+			f(got, c.res, c.coeffs, 40)
+			equalI32(t, name+" shift 40 order="+itoa(order), got, c.samples)
+		}
+	}
+}
