@@ -41,10 +41,12 @@ tasks:
       - go test ./pcm/ -run TestCrossValidateLibFLAC -v
 
   vet:
-    desc: Run go vet for amd64 and arm64
+    desc: Run go vet for amd64, arm64, 32-bit arm and 386
     cmds:
       - GOARCH=amd64 go vet ./...
       - GOARCH=arm64 go vet ./...
+      - GOARCH=arm GOARM=7 go vet ./...
+      - GOARCH=386 go vet ./...
 
   lint:
     desc: Run golangci-lint
