@@ -157,7 +157,7 @@ const _ = uint(maxScalarRestoreOrder + 1 - minNEONRestoreOrder)
 //	order  3: 3778 / 2199    order  7: 5255 / 2991    order 11: 6225 / 4574
 //	order  4: 5000 / 2118    order  8: 6127 / 3340    order 12: 6866 / 4977
 //
-// The int32 kernel wins by 27-63% at every order through 12, the highest kernel
+// The int32 kernel wins by 25-63% at every order through 12, the highest kernel
 // that exists (maxScalarKernelOrderNarrow). A NEON int32 kernel (MLA on .4S, one
 // and two accumulators) was also measured: it lost to the int64 NEON kernel at
 // orders 7-12 and did not win consistently above them, so there is none.

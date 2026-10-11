@@ -428,7 +428,7 @@ func BenchmarkLPCRestoreOrder(b *testing.B) {
 
 // benchLPCCoeffsNarrow is benchLPCCoeffs scaled so the absolute coefficient sum
 // stays below 2^16 up to order 32, which satisfies LPCRestoreNarrowSafe for 16-bit
-// samples at shift 12. benchLPCCoeffs itself fails the predicate from order 8.
+// samples at shift 12. benchLPCCoeffs itself fails the predicate from order 5.
 func benchLPCCoeffsNarrow(order int) []int32 {
 	c := make([]int32, order)
 	for j := range c {

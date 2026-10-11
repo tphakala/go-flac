@@ -71,9 +71,11 @@ const _ = uint(maxScalarRestoreOrder + 1 - minLPCRestoreOrder)
 //	order  3: 1512 / 1311    order  7: 1568 / 1508    order 11: 2593 / 2544
 //	order  4: 1533 / 1333    order  8: 1737 / 1765    order 12: 2577 / 2957
 //
-// The int32 kernel wins by 4-18% through order 7 and is level or slower from
-// order 8, so 7 is the ceiling. An AVX2 int32 kernel (VPMULLD) was also measured
-// and did not win consistently above it, so there is none.
+// The int32 kernel wins by 4-18% through order 7. From order 8 it is level or
+// slower, except at orders 10 and 11 where it is 4% and 2% faster; that is too
+// small, and orders 8 and 9 in between too level, to route past 7. An AVX2 int32
+// kernel (VPMULLD) was also measured and did not win consistently above it, so
+// there is none.
 const maxScalarRestoreOrderNarrow = 7
 
 // firstSIMDRestoreOrder backs FirstSIMDRestoreOrder: AVX2 takes orders
