@@ -213,6 +213,7 @@ func FuzzI32LPCNarrow(f *testing.F) {
 		equalI32(t, "LPCRestoreNarrow", out, samples)
 
 		if order <= maxScalarKernelOrderNarrow {
+			clear(out) // the kernel must produce every sample itself
 			lpcRestoreScalarNarrow(out, res, coeffs, shift)
 			equalI32(t, "lpcRestoreScalarNarrow", out, samples)
 		}

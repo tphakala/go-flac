@@ -257,6 +257,33 @@ func TestRestoreLPC32Parity_NarrowEligible(t *testing.T) {
 	}
 }
 
+// TestRestoreLPC32_RoutesOnPredicate pins which accumulator RestoreLPC32 picks.
+// The history here is deliberately outside the declared sample range, so the
+// two routes disagree: an order-1 coefficient of 2 on a history of MaxInt32 sums
+// to 2^32-2, which an int32 accumulator wraps to -2 (shifted by 1: -1) and an
+// int64 one keeps (2^31-1). At bps 16 the predicate holds and the narrow route
+// runs; at bps 32 and for a non-positive bps it does not and the int64
+// route runs.
+func TestRestoreLPC32_RoutesOnPredicate(t *testing.T) {
+	coeffs := []int32{2}
+	for _, tc := range []struct {
+		name       string
+		shift, bps int
+		want       int32
+	}{
+		{"narrow at bps 16", 1, 16, -1},
+		{"wide at bps 32", 1, 32, 1<<31 - 1},
+		{"wide at bps 0", 1, 0, 1<<31 - 1},
+		{"wide at negative bps", 1, -1, 1<<31 - 1},
+	} {
+		buf := []int32{1<<31 - 1, 0, 0}
+		RestoreLPC32(buf, coeffs, tc.shift, tc.bps)
+		if buf[1] != tc.want {
+			t.Errorf("%s: sample 1 = %d, want %d", tc.name, buf[1], tc.want)
+		}
+	}
+}
+
 // TestRestoreFixed32PanicsOutOfRange documents that RestoreFixed32 rejects orders
 // outside [1,4] with its range-check panic (not some incidental panic); order 0
 // is a no-op handled by the caller, not this function.

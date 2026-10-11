@@ -71,7 +71,7 @@ func TestLPCRestoreNarrowSafe_MatchesLibFLAC(t *testing.T) {
 // predicate-edge tests cover.
 var (
 	narrowEdgeBps    = []uint{8, 15, 16, 17, 20, 24, 25}
-	narrowEdgeOrders = []int{1, 2, 4, 8, 12, 32}
+	narrowEdgeOrders = []int{1, 2, 4, 7, 8, 12, 13, 32}
 )
 
 // splitNeg returns order negative coefficients whose absolute values sum to a.
@@ -125,7 +125,9 @@ const narrowEdgeShift = 1
 
 // TestLPCRestoreNarrow_EdgeOfPredicate restores the worst-case signal at the
 // largest coefficient sum the predicate admits, where the int32 sum is
-// 2^31 - 2^(bps-1), and one past it, where the sum is exactly 2^31 and wraps.
+// 2^31 - 2^(bps-1), and one past it, where the sum is exactly 2^31 and wraps in
+// an int32 accumulator (so it also pins which orders LPCRestoreNarrow routes to
+// the narrow kernels).
 func TestLPCRestoreNarrow_EdgeOfPredicate(t *testing.T) {
 	for _, bps := range narrowEdgeBps {
 		for _, order := range narrowEdgeOrders {
@@ -144,8 +146,8 @@ func TestLPCRestoreNarrow_EdgeOfPredicate(t *testing.T) {
 				equalI32(t, name+" at the edge bps="+itoa(int(bps))+" order="+itoa(order), got, samples)
 			}
 
-			// One past the edge. The public entry may route to the int64 path
-			// and still match, so only the direct narrow kernel is checked.
+			// One past the edge: the direct narrow kernel wraps; the public entry
+			// wraps only where it routes to a narrow kernel.
 			samples, res, coeffs = narrowEdgeSignal(bps, order, int64(1)<<(32-bps))
 			if LPCRestoreNarrowSafe(coeffs, bps, narrowEdgeShift) {
 				t.Fatalf("bps=%d order=%d: predicate is true one past the edge", bps, order)
@@ -156,6 +158,17 @@ func TestLPCRestoreNarrow_EdgeOfPredicate(t *testing.T) {
 				if got[order] == samples[order] {
 					t.Errorf("bps=%d order=%d: narrow kernel did not wrap past the edge (got[%d]=%d)", bps, order, order, got[order])
 				}
+			}
+			// The public entry wraps exactly for the orders it routes to the
+			// narrow kernels and matches the int64 route above them. The
+			// ceiling is a per-architecture literal (wantMaxScalarRestoreOrderNarrow,
+			// pinned in the arch test files), and the orders 7, 8, 12 and 13
+			// straddle the ceilings.
+			got := make([]int32, len(res))
+			LPCRestoreNarrow(got, res, coeffs, narrowEdgeShift)
+			if narrow := order <= wantMaxScalarRestoreOrderNarrow; narrow == (got[order] == samples[order]) {
+				t.Errorf("bps=%d order=%d: LPCRestoreNarrow routed narrow=%v but got[%d]=%d, sample %d",
+					bps, order, narrow, order, got[order], samples[order])
 			}
 		}
 	}

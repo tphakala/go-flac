@@ -640,3 +640,15 @@ func TestFirstSIMDRestoreOrder_MatchesAVX2Dispatch(t *testing.T) {
 		check(t)
 	})
 }
+
+// wantMaxScalarRestoreOrderNarrow is the narrow scalar ceiling measured for this
+// architecture (see the table at maxScalarRestoreOrderNarrow). It is a literal
+// so that a retune has to change the test as well, which keeps
+// TestLPCRestoreNarrow_EdgeOfPredicate from comparing the constant with itself.
+const wantMaxScalarRestoreOrderNarrow = 7
+
+func TestMaxScalarRestoreOrderNarrow_IsTheMeasuredCeiling(t *testing.T) {
+	if maxScalarRestoreOrderNarrow != wantMaxScalarRestoreOrderNarrow {
+		t.Fatalf("maxScalarRestoreOrderNarrow = %d, want %d", maxScalarRestoreOrderNarrow, wantMaxScalarRestoreOrderNarrow)
+	}
+}
