@@ -248,12 +248,10 @@ func lpcRestoreNarrow12(dst, res, coeffs, hist []int32, shift uint) {
 }
 
 // lpcRestoreGoNarrow is the generic int32-accumulating restore for any order
-// 1..maxLPCRestoreOrder, used by LPCRestoreNarrow above the unrolled kernels where
-// the architecture's ceiling allows it (32-bit ARM). It has the lpcRestoreScalarNarrow contract (out and
-// residual may alias, shift already clamped to maxLPCShiftNarrow, orders outside
-// the range run LPCRestore) and the same exactness precondition. The
-// coefficients are reversed once into a stack array so the tap loop walks a
-// forward window of out.
+// 1..maxLPCRestoreOrder, used by LPCRestoreNarrow above the unrolled kernels
+// where the architecture's ceiling allows it (32-bit ARM). The contract is that
+// of lpcRestoreScalarNarrow. The coefficients are reversed once into a stack
+// array so the tap loop walks a forward window of out.
 func lpcRestoreGoNarrow(out, residual, coeffs []int32, shift uint) {
 	order := len(coeffs)
 	if order < 1 || order > maxLPCRestoreOrder {
