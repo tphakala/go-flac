@@ -88,14 +88,23 @@ func RestoreFixed32(dst []int32, order int) {
 // LPC residual of order len(coeffs), the decode inverse of LPCResidualsEncode
 // and the int32 analogue of RestoreLPC. On input dst holds [warmup | residual];
 // on output it holds the restored samples. shift is FLAC's quantization
-// right-shift.
+// right-shift and bps the subframe's sample width in bits (after wasted bits, and
+// including the side-channel bit).
 //
-// It dispatches to the SIMD i32.LPCRestore kernel (AVX2/NEON/pure Go), which
-// accumulates the prediction in int64, arithmetic-shifts the full sum before
-// narrowing to int32, and adds with int32 wraparound, bit-identical to
-// RestoreLPC. Small orders take specialized scalar kernels; higher
-// orders use the SIMD kernel where one exists (AVX2, NEON) and the pure-Go
-// recurrence otherwise. The cutover is per architecture. It runs safely in place (dst aliases the residual).
-func RestoreLPC32(dst, coeffs []int32, shift int) {
+// When i32.LPCRestoreNarrowSafe(coeffs, bps, shift) holds, the prediction cannot
+// leave int32 for samples within bps bits, so it runs i32.LPCRestoreNarrow, which
+// accumulates in int32. Otherwise it runs i32.LPCRestore, which accumulates in
+// int64. Either way the result is bit-identical to RestoreLPC for a valid
+// subframe, whose samples all lie within bps bits; a corrupt stream may restore
+// to out-of-range samples, for which the two paths can differ (garbage either
+// way). Small orders take specialized scalar kernels; higher orders use the SIMD
+// kernel where one exists (AVX2, NEON) and the pure-Go recurrence otherwise. The
+// cutovers are per architecture. It runs safely in place (dst aliases the
+// residual).
+func RestoreLPC32(dst, coeffs []int32, shift, bps int) {
+	if shift >= 0 && bps > 0 && i32.LPCRestoreNarrowSafe(coeffs, uint(bps), uint(shift)) {
+		i32.LPCRestoreNarrow(dst, dst, coeffs, uint(shift))
+		return
+	}
 	i32.LPCRestore(dst, dst, coeffs, uint(shift))
 }

@@ -13,7 +13,10 @@ package i32
 // `order` entries are the verbatim warm-up samples and the rest are the residual
 // (encode) or the reconstructed samples (decode). The prediction sum is
 // accumulated in int64 so it does not overflow for FLAC's coefficient precision
-// and order; only the final shifted prediction is truncated to int32. Each
+// and order; only the final shifted prediction is truncated to int32.
+// LPCRestoreNarrow is the exception: it accumulates in int32, which is exact only
+// when LPCRestoreNarrowSafe holds for the subframe's coefficients and sample
+// width. Each
 // function clamps to n = min of its two slice lengths, writes only into the
 // caller's destination, and uses int32 wraparound. LPCResidualEncode's
 // destination must not alias its source (the FIR reads a forward window of the
@@ -48,6 +51,47 @@ const maxLPCRestoreOrder = 32
 // derived from the same constants and CPU flag LPCRestore routes on, so tests
 // can assert their reach against it.
 func FirstSIMDRestoreOrder() int { return firstSIMDRestoreOrder() }
+
+// maxLPCShiftNarrow is the largest shift the int32-accumulating kernels handle.
+// For a sum that fits in int32, a shift of 31 or more already yields 0 or -1, and
+// the 32-bit arithmetic shifts mask the count to 5 bits, so LPCRestoreNarrow
+// clamps shift to this value before any narrow kernel.
+const maxLPCShiftNarrow = 31
+
+// LPCRestoreNarrowSafe reports whether a subframe of bps-bit samples with these
+// coefficients and shift can be restored with 32-bit accumulation, LPCRestoreNarrow,
+// without changing the result. It is libFLAC 1.5.0's condition (stream_decoder.c
+// read_subframe_lpc_ with FLAC__lpc_max_residual_bps and
+// FLAC__lpc_max_prediction_before_shift_bps in lpc.c): both
+//
+//	bits(2^(bps-1) * A) <= 32            (the unshifted prediction fits int32)
+//	bits(2^(bps-1) + ceil(2^(bps-1) * A / 2^shift)) <= 32
+//
+// where A = sum(|coeffs[j]|) and bits is the signed bit width. In closed form,
+// with A as an exact 64-bit sum: A < 2^(32-bps), and
+// 2^(bps-1) + ceil(A * 2^(bps-1) / 2^shift) < 2^31.
+//
+// When it holds and every warm-up and restored sample lies in the bps-bit signed
+// range, |sum(coeffs[j]*x)| <= 2^(bps-1) * A < 2^31 for any subset of terms, so
+// the int32 sum cannot wrap in any summation order and equals the int64 sum. It
+// returns false for bps == 0, bps > 32, shift > maxLPCShiftNarrow and more than
+// maxLPCRestoreOrder coefficients.
+func LPCRestoreNarrowSafe(coeffs []int32, bps, shift uint) bool {
+	if bps == 0 || bps > 32 || shift > maxLPCShiftNarrow || len(coeffs) > maxLPCRestoreOrder {
+		return false
+	}
+	var a uint64
+	for _, c := range coeffs {
+		a += uint64(max(int64(c), -int64(c))) // |MinInt32| = 2^31 fits
+	}
+	// Checked before shifting: a << (bps-1) must not overflow uint64.
+	if a >= uint64(1)<<(32-bps) {
+		return false
+	}
+	maxPred := a << (bps - 1)
+	shifted := (maxPred + uint64(1)<<shift - 1) >> shift
+	return uint64(1)<<(bps-1)+shifted < uint64(1)<<31
+}
 
 // LPCResidualEncode writes the quantized-LPC residual into res:
 //
@@ -109,4 +153,31 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 		return
 	}
 	lpcRestoreI32(out[:n], residual[:n], coeffs, shift)
+}
+
+// LPCRestoreNarrow is LPCRestore with 32-bit accumulation: the prediction sum is
+// computed in int32 and shifted, which is cheaper than int64 on some CPUs. It is
+// bit-identical to LPCRestore only when LPCRestoreNarrowSafe(coeffs, bps, shift)
+// holds for a bps that bounds every warm-up and restored sample, which is the case
+// for a valid FLAC subframe. Otherwise the sum may wrap and the result may differ
+// from LPCRestore, but it never panics or accesses memory out of bounds. It has
+// the same n clamp, order == 0 / order >= n copy and aliasing contract as
+// LPCRestore. Orders up to the per-architecture ceiling maxScalarRestoreOrderNarrow
+// run the int32 scalar kernels (lpc_small_narrow.go); every other order runs
+// LPCRestore, because no narrow SIMD kernel beat the int64 one in measurement.
+func LPCRestoreNarrow(out, residual, coeffs []int32, shift uint) {
+	n := min(len(out), len(residual))
+	if n == 0 {
+		return
+	}
+	order := len(coeffs)
+	if order == 0 || order >= n {
+		copy(out[:n], residual[:n])
+		return
+	}
+	if order <= maxScalarRestoreOrderNarrow {
+		lpcRestoreScalarNarrow(out[:n], residual[:n], coeffs, min(shift, maxLPCShiftNarrow))
+		return
+	}
+	LPCRestore(out[:n], residual[:n], coeffs, shift)
 }

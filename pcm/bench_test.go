@@ -8,22 +8,34 @@ import (
 	"testing"
 )
 
-func BenchmarkDecodeSubset(b *testing.B) {
+// benchCorpusFile returns the bytes of the named subset file, skipping the
+// benchmark when the corpus is not checked out. A missing named file fails the
+// benchmark rather than silently measuring a different file.
+func benchCorpusFile(b *testing.B, name string) []byte {
+	b.Helper()
 	matches, _ := filepath.Glob(filepath.Join(corpusRoot, "subset", "*.flac"))
 	if len(matches) == 0 {
 		b.Skip("subset corpus unavailable")
 	}
-	// Use a mid-size representative file if present, else the first.
-	path := matches[0]
+	path := ""
 	for _, m := range matches {
-		if filepath.Base(m) == "01 - blocksize 4096.flac" {
+		if filepath.Base(m) == name {
 			path = m
 		}
+	}
+	if path == "" {
+		b.Fatalf("subset corpus file %q not found", name)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		b.Fatal(err)
 	}
+	return data
+}
+
+func BenchmarkDecodeSubset(b *testing.B) {
+	// A mid-size representative 16-bit file.
+	data := benchCorpusFile(b, "01 - blocksize 4096.flac")
 	b.SetBytes(int64(len(data)))
 	b.ReportAllocs()
 	for b.Loop() {
@@ -43,20 +55,17 @@ func BenchmarkDecodeSubset(b *testing.B) {
 // setup buffers are allocated once (in the warm-up decode below) and reused, so
 // allocs/op should be a small fraction of BenchmarkDecodeSubset's.
 func BenchmarkDecodeReuse(b *testing.B) {
-	matches, _ := filepath.Glob(filepath.Join(corpusRoot, "subset", "*.flac"))
-	if len(matches) == 0 {
-		b.Skip("subset corpus unavailable")
-	}
-	path := matches[0]
-	for _, m := range matches {
-		if filepath.Base(m) == "01 - blocksize 4096.flac" {
-			path = m
-		}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		b.Fatal(err)
-	}
+	benchDecodeReuse(b, "01 - blocksize 4096.flac")
+}
+
+// BenchmarkDecodeReuse24 is BenchmarkDecodeReuse on a 24-bit file.
+func BenchmarkDecodeReuse24(b *testing.B) {
+	benchDecodeReuse(b, "28 - high resolution audio, default settings.flac")
+}
+
+func benchDecodeReuse(b *testing.B, name string) {
+	b.Helper()
+	data := benchCorpusFile(b, name)
 	// Build and fully use the decoder once so every reusable buffer exists at its
 	// high-water size before measurement.
 	d, err := NewDecoder(bytes.NewReader(data))

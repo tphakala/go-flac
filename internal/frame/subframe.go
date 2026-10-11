@@ -149,7 +149,7 @@ func decodeLPC[T rice.Sample](br *bitio.Reader, dst []T, order, bps int) error {
 	if err := rice.DecodeResidual(br, dst, len(dst), order); err != nil {
 		return err
 	}
-	restoreLPC(dst, coeffs, int(shiftSigned), order)
+	restoreLPC(dst, coeffs, int(shiftSigned), order, bps)
 	return nil
 }
 
@@ -171,14 +171,16 @@ func restoreFixed[T rice.Sample](dst []T, order int) {
 }
 
 // restoreLPC reconstructs the subframe in place from its quantized-LPC residual.
-// The int32 path dispatches to the SIMD i32.LPCRestore kernel via
-// lpc.RestoreLPC32 (specialized scalar kernels for small orders, the SIMD
-// kernel above a per-architecture cutover where one exists); the int64 wide path keeps
-// the scalar lpc.RestoreLPC. The type assertion never escapes, so it does not
-// allocate.
-func restoreLPC[T rice.Sample](dst []T, coeffs []int32, shift, order int) {
+// The int32 path dispatches via lpc.RestoreLPC32 to i32.LPCRestoreNarrow
+// (int32 accumulation) when the subframe's coefficients and effective sample
+// width bps make that exact, and to the int64 i32.LPCRestore otherwise
+// (specialized scalar kernels for small orders, the SIMD kernel above a
+// per-architecture cutover where one exists); the int64 wide path keeps the
+// scalar lpc.RestoreLPC and ignores bps. The type assertion never escapes, so it
+// does not allocate.
+func restoreLPC[T rice.Sample](dst []T, coeffs []int32, shift, order, bps int) {
 	if d, ok := any(dst).([]int32); ok {
-		lpc.RestoreLPC32(d, coeffs, shift)
+		lpc.RestoreLPC32(d, coeffs, shift, bps)
 		return
 	}
 	lpc.RestoreLPC(dst, coeffs, shift, order)

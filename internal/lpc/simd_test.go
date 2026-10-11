@@ -4,6 +4,8 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/tphakala/go-flac/internal/i32"
 )
 
 // TestFixedResidualsDiffParity proves the SIMD i32.Diff path is bit-identical to
@@ -164,7 +166,8 @@ func TestRestoreFixed32Parity(t *testing.T) {
 
 // TestRestoreLPC32Parity proves the in-place SIMD RestoreLPC32 reconstructs a
 // subframe bit-identically to the scalar RestoreLPC (int64 accumulate, arithmetic
-// >>shift of the full sum, int32-truncated wraparound add) for every input,
+// >>shift of the full sum, int32-truncated wraparound add) for every input at
+// bps 32, where the narrow predicate never holds so it pins the int64 route,
 // across orders 1..32 (straddling the scalar/SIMD cutover on every architecture), the shift range FLAC
 // emits, lengths at and beyond the order, and full-range magnitudes.
 func TestRestoreLPC32Parity(t *testing.T) {
@@ -192,7 +195,7 @@ func TestRestoreLPC32Parity(t *testing.T) {
 
 				got := make([]int32, n)
 				copy(got, buf)
-				RestoreLPC32(got, coeffs, shift) // SIMD, in place
+				RestoreLPC32(got, coeffs, shift, 32) // SIMD, in place, int64 route
 
 				for i := range want {
 					if got[i] != want[i] {
@@ -201,6 +204,82 @@ func TestRestoreLPC32Parity(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+}
+
+// TestRestoreLPC32Parity_NarrowEligible covers the int32-accumulating route of
+// RestoreLPC32: in-range samples at bps 16 and 17 with coefficients scaled so
+// i32.LPCRestoreNarrowSafe holds, restored from their encoded residual and
+// compared with the scalar RestoreLPC and the original samples. It asserts the
+// predicate held for every case, so it cannot drift onto the int64 route.
+func TestRestoreLPC32Parity_NarrowEligible(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x7a31))
+	orders := []int{1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 31, 32}
+	lengths := []int{1, 2, 5, 9, 33, 256, 4096}
+	for _, bps := range []int{16, 17} {
+		limit := 1<<(32-bps) - 2 // largest |coeff| sum that passes at every shift
+		for _, order := range orders {
+			coeffs := make([]int32, order)
+			for j := range coeffs {
+				m := limit / order
+				coeffs[j] = int32(rng.Intn(2*m+1) - m)
+			}
+			for _, n := range lengths {
+				samples := make([]int32, n)
+				for i := range samples {
+					samples[i] = int32(rng.Intn(1<<bps)) - 1<<(bps-1)
+				}
+				for _, shift := range []int{0, 1, 9, 14, 15} {
+					if !i32.LPCRestoreNarrowSafe(coeffs, uint(bps), uint(shift)) {
+						t.Fatalf("bps=%d order=%d shift=%d: predicate does not hold", bps, order, shift)
+					}
+					res := make([]int32, n)
+					LPCResidualsEncode(res, samples, coeffs, shift)
+
+					want := make([]int32, n)
+					copy(want, res)
+					RestoreLPC(want, coeffs, shift, order)
+
+					got := make([]int32, n)
+					copy(got, res)
+					RestoreLPC32(got, coeffs, shift, bps)
+
+					for i := range want {
+						if got[i] != want[i] || got[i] != samples[i] {
+							t.Fatalf("bps=%d order=%d n=%d shift=%d: RestoreLPC32[%d]=%d, RestoreLPC %d, sample %d",
+								bps, order, n, shift, i, got[i], want[i], samples[i])
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestRestoreLPC32_RoutesOnPredicate pins which accumulator RestoreLPC32 picks.
+// The history here is deliberately outside the declared sample range, so the
+// two routes disagree: an order-1 coefficient of 2 on a history of MaxInt32 sums
+// to 2^32-2, which an int32 accumulator wraps to -2 (shifted by 1: -1) and an
+// int64 one keeps (2^31-1). At bps 16 the predicate holds and the narrow route
+// runs; at bps 32 and for a non-positive bps it does not and the int64
+// route runs.
+func TestRestoreLPC32_RoutesOnPredicate(t *testing.T) {
+	coeffs := []int32{2}
+	for _, tc := range []struct {
+		name       string
+		shift, bps int
+		want       int32
+	}{
+		{"narrow at bps 16", 1, 16, -1},
+		{"wide at bps 32", 1, 32, 1<<31 - 1},
+		{"wide at bps 0", 1, 0, 1<<31 - 1},
+		{"wide at negative bps", 1, -1, 1<<31 - 1},
+	} {
+		buf := []int32{1<<31 - 1, 0, 0}
+		RestoreLPC32(buf, coeffs, tc.shift, tc.bps)
+		if buf[1] != tc.want {
+			t.Errorf("%s: sample 1 = %d, want %d", tc.name, buf[1], tc.want)
 		}
 	}
 }
