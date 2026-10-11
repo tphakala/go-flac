@@ -38,12 +38,12 @@ func (r sideNarrowRow) coeffs() []int32 {
 // residual computes the LPC residual of the constant side signal with a plain
 // int64 recurrence, so the fixture does not depend on the code under test.
 func (r sideNarrowRow) residual() []int64 {
+	var acc int64
+	for _, c := range r.coeffs() {
+		acc += int64(c) * r.side
+	}
 	res := make([]int64, sideNarrowN)
 	for i := sideNarrowOrder; i < sideNarrowN; i++ {
-		var acc int64
-		for _, c := range r.coeffs() {
-			acc += int64(c) * r.side
-		}
 		res[i] = r.side - acc>>uint(r.shift)
 	}
 	return res
