@@ -12,7 +12,7 @@ package i32
 //	order  2: 10071 / 12274    order  5: 23099 / 23889    order  8: 39901 / 35433
 //	order  3: 16974 / 16154    order  6: 30005 / 27900
 //
-// The kernel wins at orders 1 and 2 and is 5-12% slower than the generic loop from
+// The kernel wins at orders 1 and 2 and is 5-13% slower than the generic loop from
 // order 3 on, except at order 5 where it is 3% faster. The ceiling is the highest
 // order below the first order where the kernel loses by more than 2%. The value
 // applies to every GOARM and every 32-bit ARM core; only a Cortex-A72 was measured.
@@ -33,7 +33,7 @@ const maxScalarRestoreOrder = 2
 //	order  7: 34974 /  6720    order 15: 61484 / 24252    order 32: 118224 / 44389
 //	order  8: 35155 /  7919    order 16: 63692 / 25323
 //
-// Orders 1-12 are the unrolled kernels (2.7-5.5x faster), orders 13-32 the generic
+// Orders 1-12 are the unrolled kernels (2.6-5.5x faster), orders 13-32 the generic
 // loop (2.4x faster, 58-63% lower time, p=0.000 at every measured order for 1000
 // and 4096 samples). The generic loop with four accumulators was slower than the
 // single-accumulator one at every order and is not kept.
