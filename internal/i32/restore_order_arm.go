@@ -34,7 +34,7 @@ const maxScalarRestoreOrder = 2
 //	order  8: 35155 /  7919    order 16: 63692 / 25323
 //
 // Orders 1-12 are the unrolled kernels (2.6-5.5x faster), orders 13-32 the generic
-// loop (2.4x faster, 58-63% lower time, p=0.000 at every measured order for 1000
+// loop (2.4-2.7x faster, 58-63% lower time, p=0.000 at every measured order for 1000
 // and 4096 samples). The generic loop with four accumulators was slower than the
 // single-accumulator one at every order and is not kept.
 const maxScalarRestoreOrderNarrow = 32
