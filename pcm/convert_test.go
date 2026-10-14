@@ -497,34 +497,78 @@ func TestWithConvertToMatchesBirdNETGoWidthConverter(t *testing.T) {
 
 func TestDecodeResetReuseAllocsWithConvertTo(t *testing.T) {
 	stream, _ := convStream(t, 24, 2, 12000)
-	for _, skip := range []bool{false, true} {
-		t.Run(fmt.Sprintf("skipMD5=%v", skip), func(t *testing.T) {
-			opts := []DecoderOption{WithConvertTo(16)}
-			if skip {
-				opts = append(opts, SkipMD5Verification())
-			}
-			d, err := NewDecoder(bytes.NewReader(stream), opts...)
-			if err != nil {
-				t.Fatal(err)
+	// resetAllocs measures Reset-and-decode on a warmed decoder.
+	resetAllocs := func(opts ...DecoderOption) float64 {
+		d, err := NewDecoder(bytes.NewReader(stream), opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, d); err != nil {
+			t.Fatal(err)
+		}
+		sr := bytes.NewReader(stream)
+		return testing.AllocsPerRun(30, func() {
+			sr.Reset(stream)
+			if err := d.Reset(sr, opts...); err != nil {
+				t.Fatalf("Reset: %v", err)
 			}
 			if _, err := io.Copy(io.Discard, d); err != nil {
-				t.Fatal(err)
-			}
-			sr := bytes.NewReader(stream)
-			const maxAllocs = 24
-			allocs := testing.AllocsPerRun(30, func() {
-				sr.Reset(stream)
-				if err := d.Reset(sr, opts...); err != nil {
-					t.Fatalf("Reset: %v", err)
-				}
-				if _, err := io.Copy(io.Discard, d); err != nil {
-					t.Fatalf("decode: %v", err)
-				}
-			})
-			if allocs > maxAllocs {
-				t.Fatalf("Reset-and-decode with conversion allocates %.0f/op (want <= %d)", allocs, maxAllocs)
+				t.Fatalf("decode: %v", err)
 			}
 		})
+	}
+	// Conversion must add no allocation over the same decode without it.
+	for _, skip := range []bool{false, true} {
+		t.Run(fmt.Sprintf("skipMD5=%v", skip), func(t *testing.T) {
+			base := []DecoderOption(nil)
+			conv := []DecoderOption{WithConvertTo(16)}
+			if skip {
+				base = append(base, SkipMD5Verification())
+				conv = append(conv, SkipMD5Verification())
+			}
+			want, got := resetAllocs(base...), resetAllocs(conv...)
+			if got > want {
+				t.Fatalf("Reset-and-decode with conversion allocates %.0f/op, %.0f/op without it", got, want)
+			}
+		})
+	}
+}
+
+// patchStreamInfoDepth returns a copy of stream whose STREAMINFO bits-per-sample
+// field is set to bits. STREAMINFO layout after "fLaC" and the 4-byte block header:
+// bytes 10-12 carry the sample rate (20 bits), channels-1 (3 bits) and the high bit
+// of bits-1; byte 13 carries the low 4 bits of bits-1, then the sample total.
+func patchStreamInfoDepth(stream []byte, bits int) []byte {
+	out := bytes.Clone(stream)
+	const si = 8
+	v := uint(bits - 1)
+	out[si+12] = out[si+12]&^0x01 | byte(v>>4)
+	out[si+13] = out[si+13]&0x0f | byte(v&0x0f)<<4
+	return out
+}
+
+// TestWithConvertToUsesStreamInfoDepth pins that the shift is relative to the STREAMINFO
+// depth even when the frames declare their own: a 16-bit stream whose STREAMINFO says
+// 24 is packed at 3 bytes, and converting to 32 shifts it by 8, not by 16.
+func TestWithConvertToUsesStreamInfoDepth(t *testing.T) {
+	stream, _ := convStream(t, 16, 2, 6000)
+	patched := patchStreamInfoDepth(stream, 24)
+	d, err := NewDecoder(bytes.NewReader(patched), SkipMD5Verification())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Info().BitDepth != 24 {
+		t.Fatalf("patched STREAMINFO depth = %d, want 24", d.Info().BitDepth)
+	}
+	native := unpackSamples(decodeOpts(t, patched, SkipMD5Verification()), 3)
+	got := unpackSamples(decodeOpts(t, patched, SkipMD5Verification(), WithConvertTo(32)), 4)
+	if len(native) == 0 || len(got) != len(native) {
+		t.Fatalf("got %d samples, native %d", len(got), len(native))
+	}
+	for i, v := range native {
+		if want := refConvert(v, 24, 32); got[i] != want {
+			t.Fatalf("sample %d: native %d -> %d, want %d (shift must follow STREAMINFO depth)", i, v, got[i], want)
+		}
 	}
 }
 

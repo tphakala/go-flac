@@ -345,6 +345,16 @@ func TestEncodeOutOfRangePCMNoPanic(t *testing.T) {
 }
 
 func TestMaxSampleRateBoundary(t *testing.T) {
+	if MaxSampleRate != 655350 {
+		t.Fatalf("MaxSampleRate = %d, want 655350", MaxSampleRate)
+	}
+	// The literal limit, independent of the constant.
+	if _, err := NewFrameEncoder(Config{SampleRate: 655350, BitDepth: 16, Channels: 2}); err != nil {
+		t.Errorf("NewFrameEncoder at 655350: %v", err)
+	}
+	if _, err := NewFrameEncoder(Config{SampleRate: 655351, BitDepth: 16, Channels: 2}); err == nil {
+		t.Error("NewFrameEncoder accepted 655351")
+	}
 	ok := Config{SampleRate: MaxSampleRate, BitDepth: 16, Channels: 2}
 	over := Config{SampleRate: MaxSampleRate + 1, BitDepth: 16, Channels: 2}
 	if _, err := NewEncoder(&bytes.Buffer{}, ok); err != nil {
