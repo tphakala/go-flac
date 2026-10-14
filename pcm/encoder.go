@@ -141,12 +141,15 @@ func upfrontBlockSize(seekable bool, cfg Config) int {
 	return max(blk, minStreamInfoBlockSize)
 }
 
+// MaxSampleRate is the highest sample rate, in Hz, that NewEncoder, NewFrameEncoder
+// and EncodeInterleaved accept; a Config.SampleRate above it is rejected. It is 65535
+// tens of Hz, the largest value the frame header's sample-rate code 14 can carry.
+const MaxSampleRate = 655350
+
 // validateConfig checks the codec-relevant Config fields shared by the streaming
 // Encoder and the FrameEncoder. op names the calling API for the error message.
 func validateConfig(op string, cfg Config) error {
-	if cfg.SampleRate <= 0 || cfg.SampleRate > 655350 || cfg.Channels < 1 || cfg.Channels > 8 {
-		// 655350 Hz is the FLAC maximum; the STREAMINFO sample-rate field is 20 bits,
-		// so a larger rate would be silently truncated.
+	if cfg.SampleRate <= 0 || cfg.SampleRate > MaxSampleRate || cfg.Channels < 1 || cfg.Channels > 8 {
 		return fmt.Errorf("go-flac/pcm: %s: invalid config %+v", op, cfg)
 	}
 	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {

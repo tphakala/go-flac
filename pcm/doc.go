@@ -11,6 +11,14 @@
 // accelerates seeks by narrowing the binary search; plain binary search is the
 // fallback when no table is present.
 //
+// Native output is right-aligned at the stream's own bit depth in ceil(bits/8)
+// bytes per sample, so 12-bit audio arrives in 2-byte samples at 12-bit scale.
+// WithConvertTo normalises to a fixed width (8, 16, 24 or 32 bits) by shifting,
+// and OutputBitDepth reports the width Read yields:
+//
+//	dec, err := pcm.NewDecoder(r, pcm.WithConvertTo(16))
+//	// dec.OutputBitDepth() == 16, whatever dec.Info().BitDepth is
+//
 // # Encoding
 //
 // NewEncoder accepts an io.Writer (or io.WriteSeeker) and a Config. Provide an

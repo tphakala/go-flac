@@ -58,7 +58,7 @@ type FrameEncoder struct {
 }
 
 // NewFrameEncoder returns a FrameEncoder for cfg. It validates cfg exactly like
-// NewEncoder (sample rate 1..655350, channels 1..8, bit depth 4..32, and any
+// NewEncoder (sample rate 1..MaxSampleRate, channels 1..8, bit depth 4..32, and any
 // declared TotalSamples within the 36-bit field). Config.CompressionLevel selects
 // the same parameters Encoder uses; the seek-table fields and the Vorbis-comment
 // fields (Tags, Vendor) are ignored, since a frame stream has no metadata region.
