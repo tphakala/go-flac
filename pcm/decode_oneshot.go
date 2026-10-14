@@ -36,7 +36,9 @@ var ErrDecodeLimit = errors.New("go-flac/pcm: decoded size limit exceeded")
 // output would exceed it. For a different ceiling use DecodeInterleavedLimit; for
 // a stream of unknown or unbounded length use NewDecoder, which streams the audio
 // in memory proportional to a single buffer. Options (for example
-// SkipMD5Verification) are forwarded to the underlying decoder.
+// SkipMD5Verification or WithConvertTo) are forwarded to the underlying decoder. With
+// WithConvertTo the returned PCM is at the requested depth while the returned
+// StreamInfo still describes the stream (its BitDepth is the source depth).
 func DecodeInterleaved(r io.Reader, opts ...DecoderOption) ([]byte, flac.StreamInfo, error) {
 	return DecodeInterleavedLimit(r, DefaultMaxDecodedBytes, opts...)
 }
@@ -45,8 +47,9 @@ func DecodeInterleaved(r io.Reader, opts ...DecoderOption) ([]byte, flac.StreamI
 // maxBytes is the largest decoded output it will return; a decode that would
 // exceed it stops and returns a wrapped ErrDecodeLimit. A maxBytes of zero or
 // less removes the ceiling, which is only safe for a stream the caller produced
-// or has otherwise bounded. Options (for example SkipMD5Verification) are forwarded
-// to the underlying decoder.
+// or has otherwise bounded. Options (for example SkipMD5Verification or WithConvertTo)
+// are forwarded to the underlying decoder. The ceiling counts the bytes returned, so
+// with WithConvertTo it limits the converted output.
 func DecodeInterleavedLimit(r io.Reader, maxBytes int, opts ...DecoderOption) ([]byte, flac.StreamInfo, error) {
 	d, err := NewDecoder(r, opts...)
 	if err != nil {
@@ -58,7 +61,9 @@ func DecodeInterleavedLimit(r io.Reader, maxBytes int, opts ...DecoderOption) ([
 	// Pre-size from the declared length so the common case allocates once instead
 	// of growing by doubling. presizeHint bounds the reservation; see there for why
 	// the declared count is not trusted directly.
-	if n := presizeHint(info, maxBytes); n > 0 {
+	hint := info
+	hint.BitDepth = d.OutputBitDepth() // reserve for the converted width, not the native one
+	if n := presizeHint(hint, maxBytes); n > 0 {
 		buf.Grow(n)
 	}
 

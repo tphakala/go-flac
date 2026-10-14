@@ -52,7 +52,7 @@ func writeFrameHeader(bw *bitio.Writer, blockSize, chCode, sampleRate, bitDepth 
 // 14 = tens of Hz in 16 bits) when they fit, falling back to 0 ("read from
 // STREAMINFO") otherwise. Mirrors decodeSampleRate.
 func sampleRateCode(sr int) (code, extN, extV int) {
-	// pcm.NewEncoder validates the sample rate (1..655350) before any frame is
+	// pcm.NewEncoder validates the sample rate (1..pcm.MaxSampleRate, 655350) before any frame is
 	// written, so a non-positive value here is a programming error. Fail fast
 	// rather than silently coding it as "read from STREAMINFO".
 	if sr <= 0 {

@@ -181,12 +181,16 @@ dec, err := pcm.NewDecoder(r)
 // PCM. dec.Info() returns the stream's STREAMINFO properties.
 // SeekToSample requires an io.Seeker: it returns ErrSeekUnsupported for
 // non-seekable sources and ErrInvalidSeek on a negative index.
+dec, err = pcm.NewDecoder(r, pcm.WithConvertTo(16))
+// WithConvertTo shifts samples to 8, 16, 24 or 32 bits; dec.OutputBitDepth()
+// reports the width Read yields, while dec.Info() still describes the stream.
 
 // Encoder: implemented.
 enc, err := pcm.NewEncoder(w, pcm.Config{SampleRate: 44100, BitDepth: 16, Channels: 2})
 // enc implements io.WriteCloser; write interleaved little-endian PCM and call
 // Close to flush the final frame and finalize STREAMINFO. Pass an io.WriteSeeker
 // so STREAMINFO totals and MD5 can be written back after encoding.
+// pcm.MaxSampleRate (655350 Hz) is the highest sample rate the encoder accepts.
 ```
 
 ## Command-line example

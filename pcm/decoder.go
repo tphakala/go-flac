@@ -14,9 +14,10 @@ import (
 	"github.com/tphakala/go-flac/internal/meta"
 )
 
-// Decoder decodes a FLAC stream into interleaved little-endian PCM. It implements
-// io.Reader and io.WriterTo, and offers sample-accurate SeekToSample; seeking
-// requires the underlying source to be an io.Seeker.
+// Decoder decodes a FLAC stream into interleaved little-endian PCM, right-aligned at
+// the stream's own bit depth unless WithConvertTo selects another (see OutputBitDepth).
+// It implements io.Reader and io.WriterTo, and offers sample-accurate SeekToSample;
+// seeking requires the underlying source to be an io.Seeker.
 type Decoder struct {
 	br       *bitio.Reader
 	rs       io.ReadSeeker // non-nil when the source is seekable
@@ -42,6 +43,11 @@ type Decoder struct {
 	decoded    uint64 // inter-channel samples decoded so far
 	seeked     bool   // a seek happened; disables MD5 + truncation checks
 	skipMD5    bool   // caller opted out of MD5 hashing + verification (SkipMD5Verification)
+	convertTo  int    // WithConvertTo target bit depth, valid only when convertSet
+	convertSet bool   // WithConvertTo was given for this NewDecoder or Reset call
+	outBits    int    // bit depth of the samples Read yields (native when no conversion)
+	outBytesPS int    // bytes per output sample = outBits/8, or bytesPS with no conversion
+	shift      int    // outBits - Info().BitDepth; 0 when no conversion or the same depth
 	done       bool
 	err        error
 }
@@ -53,7 +59,7 @@ var (
 
 // DecoderOption configures a Decoder at construction (NewDecoder) or when it is
 // rebound to a new stream (Reset). Options are applied after the stream header is
-// parsed and before any audio is decoded.
+// parsed and before any audio is decoded. See SkipMD5Verification and WithConvertTo.
 type DecoderOption func(*Decoder)
 
 // SkipMD5Verification disables the decoder's MD5 integrity check: the decoder does not
@@ -67,16 +73,37 @@ func SkipMD5Verification() DecoderOption {
 	return func(d *Decoder) { d.skipMD5 = true }
 }
 
+// WithConvertTo makes the decoder emit signed little-endian integer PCM at bitDepth
+// bits per sample, which must be 8, 16, 24 or 32; any other value (including 0) makes
+// NewDecoder or Reset fail with an error wrapping flac.ErrUnsupported.
+//
+// Conversion shifts each sample by bitDepth minus the stream's STREAMINFO bit depth
+// (not its container width), so a 12-bit stream converted to 16 is scaled up by 4 bits.
+// Widening is exact; narrowing truncates with an arithmetic shift (no rounding, no
+// dither). 8-bit output is signed, like FLAC's native 8-bit and go-wav's WithConvertTo.
+// A frame whose header declares a depth other than the STREAMINFO depth is scaled as if
+// it were at the stream depth, as it is already packed at that width.
+//
+// Info() is unaffected and keeps describing the stream, including its native BitDepth;
+// OutputBitDepth reports the converted width. MD5 verification runs on the native
+// samples and works unchanged, and seeking still positions in samples. The option
+// applies to the NewDecoder or Reset call it is passed to and is not remembered across
+// a later Reset, like SkipMD5Verification. If given more than once, the last value wins.
+func WithConvertTo(bitDepth int) DecoderOption {
+	return func(d *Decoder) { d.convertTo, d.convertSet = bitDepth, true }
+}
+
 // NewDecoder reads the stream marker and metadata from r, returning a Decoder with Info
-// populated. Options (for example SkipMD5Verification) configure the decoder before any
-// audio is decoded.
+// populated. Options (for example SkipMD5Verification or WithConvertTo) configure the
+// decoder before any audio is decoded; an invalid option value, such as a WithConvertTo
+// depth other than 8, 16, 24 or 32, returns an error wrapping flac.ErrUnsupported.
 func NewDecoder(r io.Reader, opts ...DecoderOption) (*Decoder, error) {
 	d := &Decoder{}
 	if err := d.init("NewDecoder", r); err != nil {
 		return nil, err
 	}
-	for _, opt := range opts {
-		opt(d)
+	if err := d.applyOptions("NewDecoder", opts); err != nil {
+		return nil, err
 	}
 	return d, nil
 }
@@ -102,13 +129,36 @@ func NewDecoder(r io.Reader, opts ...DecoderOption) (*Decoder, error) {
 //
 // Options apply to this call only: a decoder built with SkipMD5Verification and later
 // Reset without it verifies again, so pass the option on every Reset that should keep
-// skipping (matching how Encoder.Reset re-derives its behavior from cfg each call).
+// skipping (matching how Encoder.Reset re-derives its behavior from cfg each call). The
+// same holds for WithConvertTo. An invalid option value (a WithConvertTo depth other
+// than 8, 16, 24 or 32) makes Reset return an error wrapping flac.ErrUnsupported and
+// leaves the decoder in the same recoverable failed state as a bad header.
 func (d *Decoder) Reset(r io.Reader, opts ...DecoderOption) error {
 	if err := d.init("Reset", r); err != nil {
 		return err
 	}
+	return d.applyOptions("Reset", opts)
+}
+
+// applyOptions runs opts after a successful init, then derives the output format and
+// validates the WithConvertTo target. On an invalid target it clears the stream state
+// the same way a failed header parse does (including seekable, so SeekToSample cannot
+// revive the decoder) and poisons the decoder until the next Reset.
+func (d *Decoder) applyOptions(op string, opts []DecoderOption) error {
 	for _, opt := range opts {
 		opt(d)
+	}
+	d.outBits, d.outBytesPS, d.shift = d.info.BitDepth, d.bytesPS, 0
+	if d.convertSet {
+		switch d.convertTo {
+		case 8, 16, 24, 32:
+		default:
+			err := fmt.Errorf("go-flac/pcm: %s: WithConvertTo: output bit depth %d (want 8, 16, 24 or 32): %w", op, d.convertTo, flac.ErrUnsupported)
+			d.clearStream()
+			d.err = err
+			return err
+		}
+		d.outBits, d.outBytesPS, d.shift = d.convertTo, d.convertTo/8, d.convertTo-d.info.BitDepth
 	}
 	return nil
 }
@@ -148,29 +198,7 @@ func (d *Decoder) init(op string, r io.Reader) error {
 		d.md5.Reset()
 	}
 
-	// Clear every per-stream field before parsing so nothing from a previous stream
-	// (or a partially parsed failed one) can leak into this decode. The reused
-	// buffers (frame, probeFrame, probeBuf, resyncR, buf) carry no cross-stream
-	// meaning: each is fully rewritten before it is read.
-	d.info = flac.StreamInfo{}
-	d.bytesPS = 0
-	d.pending = nil
-	d.decoded = 0
-	d.seeked = false
-	// Re-derive the MD5 policy each init: NewDecoder and Reset apply their options after
-	// init, so a reused decoder honors the current call's options, not a prior call's.
-	d.skipMD5 = false
-	d.done = false
-	d.err = nil
-	d.rs = nil
-	d.seekable = false
-	d.audioStart = 0
-	d.streamEnd = 0
-	d.nominalBlock = 0
-	d.maxFrame = 0
-	d.seekPoints = nil
-	d.vendor = ""
-	d.comments = nil
+	d.clearStream()
 
 	sm, err := meta.ReadMetadata(d.br)
 	if err != nil {
@@ -217,8 +245,45 @@ func (d *Decoder) init(op string, r io.Reader) error {
 	return nil
 }
 
-// Info returns the stream's STREAMINFO-derived properties.
+// clearStream clears every per-stream field so nothing from a previous stream (or a
+// partially parsed failed one) can leak into this decode. It leaves br and md5 alone.
+// The reused buffers (frame, probeFrame, probeBuf, resyncR, buf) carry no cross-stream
+// meaning: each is fully rewritten before it is read.
+func (d *Decoder) clearStream() {
+	d.info = flac.StreamInfo{}
+	d.bytesPS = 0
+	d.pending = nil
+	d.decoded = 0
+	d.seeked = false
+	// Re-derive the MD5 and conversion policy each init: NewDecoder and Reset apply their
+	// options after init, so a reused decoder honors the current call's options, not a
+	// prior call's.
+	d.skipMD5 = false
+	d.convertTo, d.convertSet = 0, false
+	d.outBits, d.outBytesPS, d.shift = 0, 0, 0
+	d.done = false
+	d.err = nil
+	d.rs = nil
+	d.seekable = false
+	d.audioStart = 0
+	d.streamEnd = 0
+	d.nominalBlock = 0
+	d.maxFrame = 0
+	d.seekPoints = nil
+	d.vendor = ""
+	d.comments = nil
+}
+
+// Info returns the stream's STREAMINFO-derived properties. It always describes the
+// stream itself, so Info().BitDepth is the native depth even under WithConvertTo; see
+// OutputBitDepth for the depth of the samples Read yields.
 func (d *Decoder) Info() flac.StreamInfo { return d.info }
+
+// OutputBitDepth returns the bit depth of the samples Read and WriteTo yield: the
+// WithConvertTo target when that option was given, otherwise the stream's own
+// Info().BitDepth. Each sample occupies (OutputBitDepth()+7)/8 little-endian bytes.
+// It is 0 on a decoder whose NewDecoder or Reset failed.
+func (d *Decoder) OutputBitDepth() int { return d.outBits }
 
 // Vendor returns the VORBIS_COMMENT vendor string. It is "" both when the stream
 // carried no VORBIS_COMMENT block and when the block declared an empty vendor string,
@@ -461,11 +526,11 @@ func (d *Decoder) land(landStart, target, fs int64) (int64, error) {
 	if err := frame.Decode(d.br, d.info, &d.frame); err != nil {
 		return 0, err
 	}
-	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
+	d.packFrame(false) // seeked is set above, so no hashing
 	if target < fs {
 		target = fs // overshoot clamp: land at the frame start
 	}
-	drop := (target - fs) * int64(len(d.frame.Channels)) * int64(d.bytesPS)
+	drop := (target - fs) * int64(len(d.frame.Channels)) * int64(d.outBytesPS)
 	d.pending = d.buf[drop:]
 	return target, nil
 }
@@ -524,12 +589,28 @@ func (d *Decoder) decodeNextFrame() error {
 		return err
 	}
 	d.decoded += uint64(d.frame.BlockSize)
-	d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
-	if !d.seeked && !d.skipMD5 {
-		d.md5.Write(d.buf) // MD5 is meaningless once frames have been skipped, or when opted out
-	}
+	// MD5 is meaningless once frames have been skipped, or when opted out.
+	d.packFrame(!d.seeked && !d.skipMD5)
 	d.pending = d.buf
 	return nil
+}
+
+// packFrame packs d.frame into d.buf at the output width. When hashNative is set it first
+// feeds the native packed bytes to MD5, which STREAMINFO's signature is defined over.
+func (d *Decoder) packFrame(hashNative bool) {
+	if d.shift == 0 { // no conversion, or target == native depth
+		d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
+		if hashNative {
+			d.md5.Write(d.buf)
+		}
+		return
+	}
+	if hashNative { // hash the native bytes before the samples are rescaled
+		d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
+		d.md5.Write(d.buf)
+	}
+	shiftSamples(&d.frame, d.shift)
+	d.buf = appendPacked(d.buf[:0], &d.frame, d.outBytesPS)
 }
 
 // finish verifies the stream MD5 (unless the caller passed SkipMD5Verification) and
@@ -553,7 +634,7 @@ func (d *Decoder) finish() error {
 	return io.EOF
 }
 
-// Read fills p with interleaved little-endian PCM.
+// Read fills p with interleaved little-endian PCM at OutputBitDepth.
 func (d *Decoder) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		// Per io.Reader, a zero-length read returns immediately; do not decode
