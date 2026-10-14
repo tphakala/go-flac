@@ -8,8 +8,8 @@ import "github.com/tphakala/go-flac/internal/frame"
 func shiftSamples(fr *frame.Frame, shift int) {
 	if shift > 0 {
 		s := uint(shift)
-		for ch := range fr.Channels {
-			c := fr.Channels[ch][:fr.BlockSize]
+		for _, c := range fr.Channels {
+			c = c[:fr.BlockSize]
 			for i, v := range c {
 				c[i] = v << s
 			}
@@ -17,8 +17,8 @@ func shiftSamples(fr *frame.Frame, shift int) {
 		return
 	}
 	s := uint(-shift)
-	for ch := range fr.Channels {
-		c := fr.Channels[ch][:fr.BlockSize]
+	for _, c := range fr.Channels {
+		c = c[:fr.BlockSize]
 		for i, v := range c {
 			c[i] = v >> s
 		}

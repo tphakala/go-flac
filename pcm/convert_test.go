@@ -38,22 +38,9 @@ func genInRange(bits, channels, n int) []int32 {
 	return out
 }
 
-// packSamples packs interleaved sample values little-endian into ceil(bits/8) bytes.
-func packSamples(vals []int32, bits int) []byte {
-	bps := (bits + 7) / 8
-	out := make([]byte, 0, len(vals)*bps)
-	for _, v := range vals {
-		u := uint32(v)
-		for b := range bps {
-			out = append(out, byte(u>>(uint(b)*8)))
-		}
-	}
-	return out
-}
-
 // unpackSamples reads little-endian signed samples of bytesPS bytes, sign-extending
 // from the top of the container.
-func unpackSamples(b []byte, bytesPS int) []int32 {
+func unpackLE(b []byte, bytesPS int) []int32 {
 	out := make([]int32, 0, len(b)/bytesPS)
 	for i := 0; i+bytesPS <= len(b); i += bytesPS {
 		var u uint32
@@ -83,11 +70,7 @@ func convStream(t *testing.T, bits, channels, n int) (stream []byte, vals []int3
 	t.Helper()
 	vals = genInRange(bits, channels, n)
 	cfg := Config{SampleRate: 44100, BitDepth: bits, Channels: channels, CompressionLevel: 5}
-	var buf bytes.Buffer
-	if err := EncodeInterleaved(&buf, cfg, packSamples(vals, bits)); err != nil {
-		t.Fatalf("EncodeInterleaved(%dch/%dbit): %v", channels, bits, err)
-	}
-	return buf.Bytes(), vals
+	return encodeFLAC(t, cfg, packLE(vals, bits)), vals
 }
 
 func decodeOpts(t *testing.T, stream []byte, opts ...DecoderOption) []byte {
@@ -134,7 +117,7 @@ func TestWithConvertToMatchesReference(t *testing.T) {
 func checkConvertAgainstReference(t *testing.T, src, dst, ch int) {
 	t.Helper()
 	stream, vals := convStream(t, src, ch, 6000)
-	native := unpackSamples(decodeOpts(t, stream), (src+7)/8)
+	native := unpackLE(decodeOpts(t, stream), (src+7)/8)
 	if len(native) != len(vals) {
 		t.Fatalf("native decode has %d samples, want %d", len(native), len(vals))
 	}
@@ -166,10 +149,10 @@ func checkConvertAgainstReference(t *testing.T, src, dst, ch int) {
 	if !bytes.Equal(chunked, wt.Bytes()) {
 		t.Fatal("chunked Read and WriteTo disagree")
 	}
-	if want := len(vals) * dst / 8; len(chunked) != want {
+	if want := len(native) * dst / 8; len(chunked) != want {
 		t.Fatalf("output length %d, want %d", len(chunked), want)
 	}
-	got := unpackSamples(chunked, dst/8)
+	got := unpackLE(chunked, dst/8)
 	for i, v := range native {
 		if w := refConvert(v, src, dst); got[i] != w {
 			t.Fatalf("sample %d: native %d -> %d, want %d", i, v, got[i], w)
@@ -229,9 +212,9 @@ func checkConvertSeek(t *testing.T, src, dst int) {
 	const ch = 2
 	total := 3*block + 123
 	stream, _ := convStream(t, src, ch, total)
-	native := unpackSamples(decodeOpts(t, stream), (src+7)/8)
+	native := unpackLE(decodeOpts(t, stream), (src+7)/8)
 	conv := func(from int) []byte {
-		return packSamples(applyRef(native[from*ch:], src, dst), dst)
+		return packLE(applyRef(native[from*ch:], src, dst), dst)
 	}
 	open := func() *Decoder {
 		d, err := NewDecoder(bytes.NewReader(stream), WithConvertTo(dst))
@@ -471,7 +454,7 @@ func TestDecodeInterleavedConvertPresize(t *testing.T) {
 // each container-sized sample signed, then shift by bitDepth-16.
 func bngWidthConvert(native []byte, bitDepth int) []byte {
 	bps := (bitDepth + 7) / 8
-	vals := unpackSamples(native, bps)
+	vals := unpackLE(native, bps)
 	out := make([]byte, 0, len(vals)*2)
 	for _, v := range vals {
 		if bitDepth > 16 {
@@ -560,8 +543,8 @@ func TestWithConvertToUsesStreamInfoDepth(t *testing.T) {
 	if d.Info().BitDepth != 24 {
 		t.Fatalf("patched STREAMINFO depth = %d, want 24", d.Info().BitDepth)
 	}
-	native := unpackSamples(decodeOpts(t, patched, SkipMD5Verification()), 3)
-	got := unpackSamples(decodeOpts(t, patched, SkipMD5Verification(), WithConvertTo(32)), 4)
+	native := unpackLE(decodeOpts(t, patched, SkipMD5Verification()), 3)
+	got := unpackLE(decodeOpts(t, patched, SkipMD5Verification(), WithConvertTo(32)), 4)
 	if len(native) == 0 || len(got) != len(native) {
 		t.Fatalf("got %d samples, native %d", len(got), len(native))
 	}

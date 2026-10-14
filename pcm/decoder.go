@@ -46,8 +46,6 @@ type Decoder struct {
 	convertTo  int    // WithConvertTo target bit depth, valid only when convertSet
 	convertSet bool   // WithConvertTo was given for this NewDecoder or Reset call
 	outBits    int    // bit depth of the samples Read yields (native when no conversion)
-	outBytesPS int    // bytes per output sample = outBits/8, or bytesPS with no conversion
-	shift      int    // outBits - Info().BitDepth; 0 when no conversion or the same depth
 	done       bool
 	err        error
 }
@@ -148,7 +146,7 @@ func (d *Decoder) applyOptions(op string, opts []DecoderOption) error {
 	for _, opt := range opts {
 		opt(d)
 	}
-	d.outBits, d.outBytesPS, d.shift = d.info.BitDepth, d.bytesPS, 0
+	d.outBits = d.info.BitDepth
 	if d.convertSet {
 		switch d.convertTo {
 		case 8, 16, 24, 32:
@@ -158,7 +156,7 @@ func (d *Decoder) applyOptions(op string, opts []DecoderOption) error {
 			d.err = err
 			return err
 		}
-		d.outBits, d.outBytesPS, d.shift = d.convertTo, d.convertTo/8, d.convertTo-d.info.BitDepth
+		d.outBits = d.convertTo
 	}
 	return nil
 }
@@ -260,7 +258,7 @@ func (d *Decoder) clearStream() {
 	// prior call's.
 	d.skipMD5 = false
 	d.convertTo, d.convertSet = 0, false
-	d.outBits, d.outBytesPS, d.shift = 0, 0, 0
+	d.outBits = 0
 	d.done = false
 	d.err = nil
 	d.rs = nil
@@ -530,7 +528,7 @@ func (d *Decoder) land(landStart, target, fs int64) (int64, error) {
 	if target < fs {
 		target = fs // overshoot clamp: land at the frame start
 	}
-	drop := (target - fs) * int64(len(d.frame.Channels)) * int64(d.outBytesPS)
+	drop := (target - fs) * int64(len(d.frame.Channels)) * int64((d.outBits+7)/8)
 	d.pending = d.buf[drop:]
 	return target, nil
 }
@@ -598,19 +596,17 @@ func (d *Decoder) decodeNextFrame() error {
 // packFrame packs d.frame into d.buf at the output width. When hashNative is set it first
 // feeds the native packed bytes to MD5, which STREAMINFO's signature is defined over.
 func (d *Decoder) packFrame(hashNative bool) {
-	if d.shift == 0 { // no conversion, or target == native depth
+	shift := d.outBits - d.info.BitDepth // 0 with no conversion or target == native depth
+	if shift == 0 || hashNative {
 		d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
 		if hashNative {
 			d.md5.Write(d.buf)
 		}
-		return
 	}
-	if hashNative { // hash the native bytes before the samples are rescaled
-		d.buf = appendPacked(d.buf[:0], &d.frame, d.bytesPS)
-		d.md5.Write(d.buf)
+	if shift != 0 { // rescale after hashing, then repack at the output width
+		shiftSamples(&d.frame, shift)
+		d.buf = appendPacked(d.buf[:0], &d.frame, (d.outBits+7)/8)
 	}
-	shiftSamples(&d.frame, d.shift)
-	d.buf = appendPacked(d.buf[:0], &d.frame, d.outBytesPS)
 }
 
 // finish verifies the stream MD5 (unless the caller passed SkipMD5Verification) and

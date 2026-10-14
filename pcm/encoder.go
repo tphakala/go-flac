@@ -150,7 +150,6 @@ const MaxSampleRate = 655350
 // Encoder and the FrameEncoder. op names the calling API for the error message.
 func validateConfig(op string, cfg Config) error {
 	if cfg.SampleRate <= 0 || cfg.SampleRate > MaxSampleRate || cfg.Channels < 1 || cfg.Channels > 8 {
-		// MaxSampleRate is the encoder's sample-rate limit.
 		return fmt.Errorf("go-flac/pcm: %s: invalid config %+v", op, cfg)
 	}
 	if cfg.BitDepth < 4 || cfg.BitDepth > 32 {
