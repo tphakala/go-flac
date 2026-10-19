@@ -102,7 +102,7 @@ Tests run without audio hardware. The corpus and libFLAC checks skip when their 
 
 ## Commands
 
-Go version is read from `go.mod` (currently 1.27). The project tracks the latest stable Go, so no shims or build tags for older releases. golangci-lint is pinned to v2.14.0 in `GOLANGCI_LINT_VERSION` in `.github/workflows/ci.yml`; bump it by hand when a release ships (Dependabot does not see that string) and fix any new findings in the same change.
+Go version is read from `go.mod` (currently 1.27). The project tracks the latest stable Go, so no shims or build tags for older releases. golangci-lint is pinned to v2.15.0 in `GOLANGCI_LINT_VERSION` in `.github/workflows/ci.yml`; bump it by hand when a release ships (Dependabot does not see that string) and fix any new findings in the same change.
 
 ```
 task build           # go build ./...
