@@ -345,11 +345,12 @@ var errSeekFrameCut = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpe
 // returns the stream's total sample count (the next read is io.EOF). A negative index
 // returns ErrInvalidSeek; a non-seekable source returns ErrSeekUnsupported.
 //
-// When the source ends partway through a frame, a seek whose target lies in that frame
-// (or, for an unknown-length stream, anywhere past the last complete frame) returns an
-// error wrapping flac.ErrTruncatedStream and io.ErrUnexpectedEOF. A target in an
-// earlier, complete frame still lands, and reading on reports the truncation when it
-// reaches the cut frame.
+// When the source ends inside a frame, after its first two bytes, a seek below any known
+// TotalSamples whose target lies in that frame (or, for an unknown-length stream,
+// anywhere past the last complete frame) returns an error wrapping
+// flac.ErrTruncatedStream and io.ErrUnexpectedEOF. A target in an earlier, complete
+// frame still lands, and reading on reports the truncation when it reaches the cut
+// frame.
 //
 // A seek that fails after those two argument checks leaves the decoder in a hard-failed
 // state, whether the failure came from the source (an I/O error while probing) or from
@@ -419,7 +420,7 @@ func (d *Decoder) seekFailed(err error) (int64, error) {
 // searchFrame returns the byte offset and first sample of the frame containing target.
 // landStart < 0 means the source ends cleanly with no frame at or after lo containing
 // target; endSample is then the end of the last frame the linear scan decoded (0 if it
-// decoded none). A frame cut short by the end of the source returns errSeekFrameCut.
+// decoded none). A frame the source ends inside, after its first two bytes, returns errSeekFrameCut.
 func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample int64, err error) {
 	const linearWindow = 1 << 16 // bytes; below this, scan forward frame by frame
 	for hi-lo > linearWindow {
