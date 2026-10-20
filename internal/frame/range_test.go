@@ -232,7 +232,10 @@ func rangeCases() []rangeCase {
 
 // TestDecodeRejectsOutOfRangeSamples feeds CRC-valid frames whose samples leave
 // their bit depth and expects flac.ErrSampleOutOfRange, a verdict libFLAC 1.5.0
-// reaches too (its decoder compares the final output to the frame depth). The
+// reaches for plain out-of-range output (it compares the final output to the
+// frame depth, stream_decoder.c lines 2457 to 2470). The rows "wasted bits wrap
+// back in range" and the two 32-bit narrowing rows are rejected here but, from
+// reading that code and not from running it, accepted by libFLAC. The
 // accept rows pin the boundaries so the limit cannot drift by one.
 func TestDecodeRejectsOutOfRangeSamples(t *testing.T) {
 	for _, c := range rangeCases() {

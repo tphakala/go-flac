@@ -28,10 +28,12 @@ var (
 	// ErrSampleOutOfRange means a frame passed its CRC checks but decoded to a
 	// sample outside its bit depth: a subframe sample outside the width that
 	// subframe is coded at, or a stereo-decoded sample outside the frame's bit
-	// depth. A conforming encoder never produces such a frame. libFLAC rejects
-	// them too (it compares each decoded sample with the frame bit depth), so the
-	// decoder reports it instead of returning samples that depend on the
-	// arithmetic route taken.
+	// depth. A conforming encoder never produces such a frame. libFLAC 1.5.0 also
+	// rejects a frame whose decoded output leaves the frame bit depth
+	// (stream_decoder.c, lines 2457 to 2470), but it does not check each subframe
+	// at its own width as this decoder does, so it accepts some crafted frames
+	// that wrap back into range. The decoder reports the error instead of
+	// returning samples that depend on the arithmetic route taken.
 	ErrSampleOutOfRange = errors.New("go-flac: decoded sample outside the frame bit depth")
 	// ErrInvalidSeek means SeekToSample was called with a negative sample index.
 	ErrInvalidSeek = errors.New("go-flac: invalid seek (negative sample index)")

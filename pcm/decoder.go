@@ -465,8 +465,8 @@ func (d *Decoder) firstSample(fr *frame.Frame) int64 {
 	return int64(fr.Number) * int64(d.nominalBlock) // frame number * nominal block size
 }
 
-// probe finds the first CRC-16-valid frame at or after absolute offset b, decoding it
-// into d.probeFrame. It returns the frame's absolute start and end offsets, or ok=false
+// probe finds the first CRC-16-valid frame, with all samples inside its bit depth,
+// at or after absolute offset b, decoding it into d.probeFrame. It returns the frame's absolute start and end offsets, or ok=false
 // when no complete frame remains before streamEnd. It does not disturb d.br.
 func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 	window := max(int64(2*d.maxFrame), probeChunkDefault)

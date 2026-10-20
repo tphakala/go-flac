@@ -41,8 +41,12 @@ func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
 // verdict independent of the LPC restore route: the int32-accumulating and int64
 // kernels agree up to and including the first sample outside the width (the
 // prediction history is in range until then, FuzzI32LPCNarrow pins it), and any
-// such sample is rejected, so the later, route-dependent values are never
-// returned.
+// stored sample outside the width is rejected, so the later, route-dependent
+// values are never returned. The check sees samples as the restore kernels
+// store them, residual + int32(sum >> shift) (internal/i32/lpc.go:127-128), so
+// on the int64 route a prediction whose shifted sum leaves int32 wraps and can
+// land back in range and pass. libFLAC's verdict on such a frame, and whether
+// every kernel wraps it identically, are NOT MEASURED.
 //
 // This is stricter than libFLAC 1.5.0, which compares only the decoded output of
 // each channel with the frame bit depth (stream_decoder.c, FLAC 1.5.0 tag, lines
