@@ -45,6 +45,7 @@ A change that violates one of these is wrong even if tests pass.
 6. **Typed errors with `%w`.** Map conditions to the sentinels in `flac.go` so callers can use `errors.Is`:
    - `ErrUnsupported`: reserved or illegal coded value, unsupported layout, or an invalid option value (for example a `WithConvertTo` depth other than 8, 16, 24 or 32).
    - `ErrCRCMismatch`: frame header CRC-8 or frame CRC-16 failed.
+   - `ErrSampleOutOfRange`: a CRC-valid frame decodes to a sample outside its bit depth (checked per FIXED and LPC subframe at its effective width, and on the stereo-decoded channels at the frame depth). Corruption, not a limit.
    - `ErrMD5Mismatch`: decoded audio does not match the STREAMINFO MD5.
    - `ErrMissingStreamInfo`: no STREAMINFO block, or not first.
    - `ErrTruncatedStream`: stream ended before the declared sample count, or a frame body was cut short (mid-frame truncation also wraps `io.ErrUnexpectedEOF`).
@@ -141,6 +142,7 @@ Flag these, they are real defects here:
 - A panic, index error, or unbounded allocation reachable from stream bytes, in the decoder, `internal/meta`, `internal/frame` or `internal/bitio`.
 - A count or length from the stream trusted before it is checked against the bytes present, or an overflow on 32-bit (`int` arithmetic on a sample count, byte offset or cost accumulator).
 - A corrupt stream reported as `ErrDecodeLimit` or `ErrUnsupported`, or a limit reported as corruption; a returned error that does not wrap a sentinel where one applies.
+- A decoded sample outside the frame's bit depth returned without `ErrSampleOutOfRange`.
 - An MD5 or truncation check that runs after a seek, or is skipped when it should run.
 - An allocation on the per-frame decode path or the steady-state encode path, or a `Reset` that leaves state from the previous stream behind.
 - A new kernel or parsing path with no parity test or fuzz target.
@@ -156,6 +158,7 @@ Intentional, do not flag:
 - Different LPC restore cutover orders per architecture; they are measured per-architecture.
 - Compression ratio matching libFLAC but throughput trailing it; the README states this.
 - Large `_test.go` files and many small test helpers across the `pcm` package.
+- Rejecting a crafted frame with `ErrSampleOutOfRange` that libFLAC accepts because its wasted-bits shift or 32-bit arithmetic wraps the bad sample back into range. The range check runs per subframe at its effective width so the verdict does not depend on the LPC restore route; no conforming encoder writes such a frame.
 
 ## Things that do not belong in the repo
 

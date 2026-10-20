@@ -8,6 +8,7 @@ import (
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
 	"github.com/tphakala/go-flac/internal/crc"
+	"github.com/tphakala/go-flac/internal/rice"
 )
 
 // Frame holds one decoded FLAC frame. Channels and the decorrelation scratch
@@ -83,6 +84,13 @@ func (h *header) channels() int {
 
 // Decode decodes exactly one frame from br into dst. dst.Channels is grown/reused
 // to hold the frame's channels at its block size.
+//
+// A frame is accepted only when its header CRC-8 and frame CRC-16 match and every
+// decoded sample fits the frame bit depth. The checks run in that order: a
+// subframe or stereo channel found out of range is remembered while the frame is
+// read to its end, and flac.ErrSampleOutOfRange is returned only after the stored
+// CRC-16 has matched. A frame with a damaged CRC therefore reports
+// flac.ErrCRCMismatch whatever its samples decode to.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	// The CRC tap is a reusable, non-closure tap living on the Frame, so decoding a
 	// frame allocates no tap closure (and nothing at all once its scratch has grown to
@@ -118,6 +126,9 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	nch := hdr.channels()
 	ensureChannels(dst, nch, hdr.blockSize)
 
+	// outOfRange is the deferred range verdict. It lives in this call only, so a
+	// rejected frame leaves no state for the next Decode.
+	outOfRange := false
 	if hdr.channelAssignment <= 7 {
 		bps := hdr.bitsPerSample
 		if bps >= 25 {
@@ -129,7 +140,11 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 			scratch := dst.work64[0][:hdr.blockSize]
 			for ch := range nch {
 				if err := decodeSubframe64(br, scratch, bps); err != nil {
-					return err
+					if !errors.Is(err, errSubframeOutOfRange) {
+						return err
+					}
+					outOfRange = true
+					continue
 				}
 				out := dst.Channels[ch][:hdr.blockSize]
 				for i, v := range scratch {
@@ -139,12 +154,18 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 		} else {
 			for ch := range nch {
 				if err := decodeSubframe(br, dst.Channels[ch][:hdr.blockSize], bps); err != nil {
-					return err
+					if !errors.Is(err, errSubframeOutOfRange) {
+						return err
+					}
+					outOfRange = true
 				}
 			}
 		}
 	} else if err := decodeStereoDecorrelated(br, &hdr, dst); err != nil {
-		return err
+		if !errors.Is(err, errSubframeOutOfRange) {
+			return err
+		}
+		outOfRange = true
 	}
 
 	if err := br.SkipToByteBoundary(); err != nil {
@@ -164,6 +185,9 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	}
 	if stored != uint64(computed) {
 		return fmt.Errorf("frame: CRC-16 %#x != %#x: %w", stored, computed, flac.ErrCRCMismatch)
+	}
+	if outOfRange {
+		return fmt.Errorf("frame: decoded sample outside the %d-bit range: %w", hdr.bitsPerSample, flac.ErrSampleOutOfRange)
 	}
 
 	dst.BlockSize = hdr.blockSize
@@ -187,10 +211,52 @@ func ensureChannels(dst *Frame, nch, blockSize int) {
 	}
 }
 
+// decodeDeferred decodes one subframe of a stereo frame. bad reports that it
+// restored to a sample outside its width (the subframe was still read to its
+// end); err is any other failure.
+func decodeDeferred[T rice.Sample](br *bitio.Reader, dst []T, bps int) (bad bool, err error) {
+	if err := decodeSubframeT(br, dst, bps); err != nil {
+		if errors.Is(err, errSubframeOutOfRange) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+// decodePair decodes a stereo frame's two subframes, a then b, at the effective
+// widths wa and wb. Both are always read to their end, even when the first is
+// out of range, so the reader finishes the frame body either way.
+func decodePair[T rice.Sample](br *bitio.Reader, a, b []T, wa, wb int) (bad bool, err error) {
+	badA, err := decodeDeferred(br, a, wa)
+	if err != nil {
+		return false, err
+	}
+	badB, err := decodeDeferred(br, b, wb)
+	if err != nil {
+		return false, err
+	}
+	return badA || badB, nil
+}
+
+// decodeStereoDecorrelated decodes a left/side, right/side or mid/side frame into
+// dst.Channels. It returns errSubframeOutOfRange when a subframe, or a channel the
+// decorrelation computes from them, falls outside its bit depth. The channels
+// that are subframes themselves (left in left/side, right in right/side) were
+// checked at the frame depth already; the computed ones are checked here, once
+// both subframes are known to be in range, because only then is the arithmetic
+// exact.
 func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 	bs := hdr.blockSize
 	bps := hdr.bitsPerSample
 	out0, out1 := dst.Channels[0][:bs], dst.Channels[1][:bs]
+
+	// The side channel carries one extra bit; it is the second subframe except in
+	// right/side.
+	wa, wb := bps, bps+1
+	if hdr.channelAssignment == 9 {
+		wa, wb = bps+1, bps
+	}
 
 	if bps >= 25 {
 		if cap(dst.work64[0]) < bs {
@@ -201,31 +267,24 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 		}
 		a := dst.work64[0][:bs]
 		b := dst.work64[1][:bs]
+		bad, err := decodePair(br, a, b, wa, wb)
+		if err != nil {
+			return err
+		}
+		if bad {
+			return errSubframeOutOfRange
+		}
+		ok := true
 		switch hdr.channelAssignment {
 		case 8: // left/side
-			if err := decodeSubframe64(br, a, bps); err != nil {
-				return err
-			}
-			if err := decodeSubframe64(br, b, bps+1); err != nil {
-				return err
-			}
-			decorrelateLeftSide64(a, b, out0, out1)
+			ok = decorrelateLeftSide64(a, b, out0, out1, bps)
 		case 9: // right/side
-			if err := decodeSubframe64(br, a, bps+1); err != nil {
-				return err
-			}
-			if err := decodeSubframe64(br, b, bps); err != nil {
-				return err
-			}
-			decorrelateRightSide64(a, b, out0, out1)
+			ok = decorrelateRightSide64(a, b, out0, out1, bps)
 		case 10: // mid/side
-			if err := decodeSubframe64(br, a, bps); err != nil {
-				return err
-			}
-			if err := decodeSubframe64(br, b, bps+1); err != nil {
-				return err
-			}
-			decorrelateMidSide64(a, b, out0, out1)
+			ok = decorrelateMidSide64(a, b, out0, out1, bps)
+		}
+		if !ok {
+			return errSubframeOutOfRange
 		}
 		return nil
 	}
@@ -238,31 +297,27 @@ func decodeStereoDecorrelated(br *bitio.Reader, hdr *header, dst *Frame) error {
 	}
 	a := dst.work32[0][:bs]
 	b := dst.work32[1][:bs]
+	bad, err := decodePair(br, a, b, wa, wb)
+	if err != nil {
+		return err
+	}
+	if bad {
+		return errSubframeOutOfRange
+	}
+	ok := true
 	switch hdr.channelAssignment {
 	case 8:
-		if err := decodeSubframe(br, a, bps); err != nil {
-			return err
-		}
-		if err := decodeSubframe(br, b, bps+1); err != nil {
-			return err
-		}
 		decorrelateLeftSide(a, b, out0, out1)
+		ok = inRange(out1, bps)
 	case 9:
-		if err := decodeSubframe(br, a, bps+1); err != nil {
-			return err
-		}
-		if err := decodeSubframe(br, b, bps); err != nil {
-			return err
-		}
 		decorrelateRightSide(a, b, out0, out1)
+		ok = inRange(out0, bps)
 	case 10:
-		if err := decodeSubframe(br, a, bps); err != nil {
-			return err
-		}
-		if err := decodeSubframe(br, b, bps+1); err != nil {
-			return err
-		}
 		decorrelateMidSide(a, b, out0, out1)
+		ok = inRange(out0, bps) && inRange(out1, bps)
+	}
+	if !ok {
+		return errSubframeOutOfRange
 	}
 	return nil
 }

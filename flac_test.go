@@ -46,6 +46,7 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		flac.ErrSeekUnsupported, flac.ErrMissingStreamInfo,
 		flac.ErrCRCMismatch, flac.ErrMD5Mismatch, flac.ErrUnsupported,
 		flac.ErrEncoderClosed, flac.ErrTruncatedStream, flac.ErrInvalidSeek,
+		flac.ErrSampleOutOfRange,
 	}
 	for i := range errs {
 		if errs[i] == nil {

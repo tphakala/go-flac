@@ -79,13 +79,13 @@ func TestDecorrelateSIMDMatchesScalar(t *testing.T) {
 		modes := []mode{
 			{"left/side",
 				func(oL, oR []int32) { decorrelateLeftSide(left, side, oL, oR) },
-				func(oL, oR []int32) { decorrelateLeftSide64(left64, side64, oL, oR) }},
+				func(oL, oR []int32) { decorrelateLeftSide64(left64, side64, oL, oR, 32) }},
 			{"right/side",
 				func(oL, oR []int32) { decorrelateRightSide(side, right, oL, oR) },
-				func(oL, oR []int32) { decorrelateRightSide64(side64, right64, oL, oR) }},
+				func(oL, oR []int32) { decorrelateRightSide64(side64, right64, oL, oR, 32) }},
 			{"mid/side",
 				func(oL, oR []int32) { decorrelateMidSide(mid, side, oL, oR) },
-				func(oL, oR []int32) { decorrelateMidSide64(mid64, side64, oL, oR) }},
+				func(oL, oR []int32) { decorrelateMidSide64(mid64, side64, oL, oR, 32) }},
 		}
 		for _, m := range modes {
 			simdL, simdR := make([]int32, n), make([]int32, n)

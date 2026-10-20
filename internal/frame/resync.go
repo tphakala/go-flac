@@ -13,7 +13,8 @@ import (
 type FindResult int
 
 const (
-	// FrameFound: a CRC-16-valid frame begins at the returned start offset.
+	// FrameFound: a CRC-16-valid frame, with every sample inside its bit depth,
+	// begins at the returned start offset.
 	FrameFound FindResult = iota
 	// FrameNotFound: no valid frame begins anywhere in the buffer.
 	FrameNotFound
@@ -26,7 +27,9 @@ const (
 // succeeds, decoding that frame into dst. A FLAC frame header is byte aligned and
 // begins with 0xFF followed by a byte matching b&0xFE == 0xF8 (14-bit sync + reserved
 // 0 bit). Each candidate is fully decoded so CRC-16 rejects a false sync inside
-// residual data. It returns the start offset within data, the byte length of the
+// residual data. A candidate that fails its CRCs or format checks, or decodes to a
+// sample outside the frame bit depth (flac.ErrSampleOutOfRange), is skipped like a
+// false sync. It returns the start offset within data, the byte length of the
 // decoded frame, and a result code.
 //
 // r is scratch: it is Reset for each candidate. Callers that scan repeatedly (the
@@ -48,7 +51,8 @@ func FindNextFrame(r *bitio.Reader, data []byte, si flac.StreamInfo, dst *Frame)
 			// needing more data.
 			return i, 0, FrameTruncated
 		}
-		// CRC mismatch / bad format: a false positive. Keep scanning.
+		// CRC mismatch / bad format / out-of-range sample: a false positive. Keep
+		// scanning.
 	}
 	return 0, 0, FrameNotFound
 }

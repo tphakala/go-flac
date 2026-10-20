@@ -13,6 +13,12 @@
 // at a time, so pass an *os.File directly; a bufio.Reader wrapper would hide the
 // io.Seeker and make SeekToSample return flac.ErrSeekUnsupported.
 //
+// A frame that passes its CRC checks but decodes to a sample outside its bit
+// depth is rejected with an error wrapping flac.ErrSampleOutOfRange. Like a CRC
+// failure it is sticky: Read and WriteTo deliver the frames before it, then keep
+// returning the error, and the one-shot DecodeInterleaved returns no data.
+// SeekToSample skips such a frame as it skips one with a bad CRC.
+//
 // Native output is right-aligned at the stream's own bit depth in ceil(bits/8)
 // bytes per sample, so 12-bit audio arrives in 2-byte samples at 12-bit scale.
 // WithConvertTo normalises to a fixed width (8, 16, 24 or 32 bits) by shifting,

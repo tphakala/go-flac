@@ -160,7 +160,10 @@ func LPCRestore(out, residual, coeffs []int32, shift uint) {
 // bit-identical to LPCRestore only when LPCRestoreNarrowSafe(coeffs, bps, shift)
 // holds for a bps that bounds every warm-up and restored sample, which is the case
 // for a valid FLAC subframe. Otherwise the sum may wrap and the result may differ
-// from LPCRestore, but it never panics or accesses memory out of bounds. It has
+// from LPCRestore, but it never panics or accesses memory out of bounds. When the
+// predicate holds and the warm-up samples are within bps, the two still agree up
+// to and including the first restored sample outside bps and can differ after it
+// (FuzzI32LPCNarrow pins this). It has
 // the same n clamp, order == 0 / order >= n copy and aliasing contract as
 // LPCRestore. Orders up to the per-architecture ceiling maxScalarRestoreOrderNarrow
 // run int32 code (lpc_small_narrow.go): the unrolled kernels through

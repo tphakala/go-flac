@@ -95,12 +95,14 @@ func RestoreFixed32(dst []int32, order int) {
 // leave int32 for samples within bps bits, so it runs i32.LPCRestoreNarrow, which
 // accumulates in int32. Otherwise it runs i32.LPCRestore, which accumulates in
 // int64. Either way the result is bit-identical to RestoreLPC for a valid
-// subframe, whose samples all lie within bps bits; a corrupt stream may restore
-// to out-of-range samples, for which the two paths can differ (garbage either
-// way). Small orders take specialized scalar kernels; higher orders use the SIMD
-// kernel where one exists (AVX2, NEON) and the pure-Go recurrence otherwise. The
-// cutovers are per architecture. It runs safely in place (dst aliases the
-// residual).
+// subframe, whose samples all lie within bps bits. For a subframe with a sample
+// outside bps bits the two paths agree up to and including the first such
+// sample and can differ after it; the decoder rejects any subframe whose stored
+// samples include one (decodeSubframeT in internal/frame), so the choice of
+// route does not change decoded output. Small orders take specialized scalar kernels; higher
+// orders use the SIMD kernel where one exists (AVX2, NEON) and the pure-Go
+// recurrence otherwise. The cutovers are per architecture. It runs safely in
+// place (dst aliases the residual).
 func RestoreLPC32(dst, coeffs []int32, shift, bps int) {
 	if shift >= 0 && bps > 0 && i32.LPCRestoreNarrowSafe(coeffs, uint(bps), uint(shift)) {
 		i32.LPCRestoreNarrow(dst, dst, coeffs, uint(shift))
