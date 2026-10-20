@@ -133,10 +133,9 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	if hdr.channelAssignment <= 7 {
 		bps := hdr.bitsPerSample
 		if bps >= 25 {
-			// Wide path: predictions and restored sums can exceed int32 (and the
-			// side channel of a stereo frame has 33 bits), so decode each channel in
-			// int64 scratch then narrow to the int32 output (a valid sample fits
-			// int32).
+			// Wide path: predictions and restored sums can exceed int32, so decode
+			// each channel in int64 scratch then narrow to the int32 output (a valid
+			// sample fits int32).
 			if cap(dst.work64[0]) < hdr.blockSize {
 				dst.work64[0] = make([]int64, hdr.blockSize)
 			}
