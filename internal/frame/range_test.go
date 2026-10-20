@@ -227,6 +227,102 @@ func rangeCases() []rangeCase {
 				writeConstant64(bw, -1, 0, 33)
 			},
 		},
+		{
+			// mid -32768 and an odd side 3 rebuild right = -32769 while left stays
+			// -32766, so only the right channel is out of range.
+			name: "mid/side right-only overflow", bits: 16, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim(bw, slices.Repeat([]int32{-32768}, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{3}, n), 0, 17)
+			},
+		},
+		{
+			// The first stereo subframe is out of range and a second one follows: the
+			// decoder must still read the second to reach the CRC-16.
+			name: "left/side first subframe out of range", bits: 16, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				res := zeros(n)
+				res[3] = 40000
+				writeRawFixed(bw, 0, 16, nil, res)
+				writeVerbatim(bw, slices.Repeat([]int32{0}, n), 0, 17)
+			},
+		},
+		{
+			name: "independent stereo first subframe out of range", bits: 16, chCode: chIndependent2, reject: true,
+			build: func(bw *bitio.Writer) {
+				res := zeros(n)
+				res[3] = 40000
+				writeRawFixed(bw, 0, 16, nil, res)
+				writeConstant(bw, 0, 0, 16)
+			},
+		},
+		{
+			// 28-bit frames take the int64 path. With m = 2*mid|side&1, mid 2^27-1 and
+			// side 1 give left 2^27 and right 2^27-1: only the left channel leaves the
+			// 28-bit range.
+			name: "28-bit mid/side left-only overflow", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{1<<27 - 1}, n), 0, 28)
+				writeVerbatim64(bw, slices.Repeat([]int64{1}, n), 0, 29)
+			},
+		},
+		{
+			// mid -2^27 and side 3 give left -2^27+2 and right -2^27-1: only the right
+			// channel leaves the range.
+			name: "28-bit mid/side right-only overflow", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{-(1 << 27)}, n), 0, 28)
+				writeVerbatim64(bw, slices.Repeat([]int64{3}, n), 0, 29)
+			},
+		},
+		{
+			// mid 2^27-1 and side -1 give left 2^27-1 and right 2^27: only the right
+			// channel leaves the range, above the maximum.
+			name: "28-bit mid/side right positive overflow", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{1<<27 - 1}, n), 0, 28)
+				writeVerbatim64(bw, slices.Repeat([]int64{-1}, n), 0, 29)
+			},
+		},
+		{
+			// mid -2^27 and side -3 give left -2^27-1 and right -2^27+2: only the left
+			// channel leaves the range, below the minimum.
+			name: "28-bit mid/side left negative overflow", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{-(1 << 27)}, n), 0, 28)
+				writeVerbatim64(bw, slices.Repeat([]int64{-3}, n), 0, 29)
+			},
+		},
+		{
+			// The wide independent loop skips the narrowing copy for a bad subframe
+			// and must still read the second one to reach the CRC-16.
+			name: "28-bit independent stereo first subframe out of range", bits: 28, chCode: chIndependent2, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeRawFixed(bw, 0, 28, []int64{1<<27 - 1}, step1(1))
+				writeConstant64(bw, 0, 0, 28)
+			},
+		},
+		{
+			name: "28-bit right/side positive overflow", bits: 28, chCode: chRightSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{1}, n), 0, 29)
+				writeVerbatim64(bw, slices.Repeat([]int64{1<<27 - 1}, n), 0, 28)
+			},
+		},
+		{
+			name: "28-bit right/side negative overflow", bits: 28, chCode: chRightSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{-1}, n), 0, 29)
+				writeVerbatim64(bw, slices.Repeat([]int64{-(1 << 27)}, n), 0, 28)
+			},
+		},
+		{
+			name: "28-bit left/side negative overflow", bits: 28, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, slices.Repeat([]int64{-(1 << 27)}, n), 0, 28)
+				writeVerbatim64(bw, slices.Repeat([]int64{1}, n), 0, 29)
+			},
+		},
 	}
 }
 
@@ -268,26 +364,35 @@ func TestDecodeRejectsOutOfRangeSamples(t *testing.T) {
 
 // TestDecodeRangeVerdictAfterCRC checks the reporting order: a frame whose
 // samples are out of range but whose CRC-16 is broken reports ErrCRCMismatch,
-// so a bit flip in a real stream keeps its corruption verdict.
+// so a bit flip in a real stream keeps its corruption verdict. One frame per
+// place Decode defers the range verdict: independent narrow, stereo output
+// check, wide independent and wide stereo.
 func TestDecodeRangeVerdictAfterCRC(t *testing.T) {
-	var c rangeCase
+	names := []string{
+		"lpc narrow route", "left/side right out of range",
+		"28-bit independent", "32-bit left/side narrowing wrap",
+	}
+	byName := map[string]rangeCase{}
 	for _, rc := range rangeCases() {
-		if rc.name == "lpc narrow route" {
-			c = rc
-		}
+		byName[rc.name] = rc
 	}
-	if !c.reject {
-		t.Fatal("fixture \"lpc narrow route\" missing or not an out-of-range frame")
-	}
-	raw := c.bytes()
-	raw[len(raw)-1] ^= 0xff
-	var fr Frame
-	err := Decode(bitio.NewReader(bytes.NewReader(raw)), c.streamInfo(), &fr)
-	if !errors.Is(err, flac.ErrCRCMismatch) {
-		t.Fatalf("Decode error = %v, want ErrCRCMismatch", err)
-	}
-	if errors.Is(err, flac.ErrSampleOutOfRange) {
-		t.Fatalf("Decode error %v reports the range verdict before the CRC", err)
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			c, ok := byName[name]
+			if !ok || !c.reject {
+				t.Fatalf("fixture %q missing or not an out-of-range frame", name)
+			}
+			raw := c.bytes()
+			raw[len(raw)-1] ^= 0xff
+			var fr Frame
+			err := Decode(bitio.NewReader(bytes.NewReader(raw)), c.streamInfo(), &fr)
+			if !errors.Is(err, flac.ErrCRCMismatch) {
+				t.Fatalf("Decode error = %v, want ErrCRCMismatch", err)
+			}
+			if errors.Is(err, flac.ErrSampleOutOfRange) {
+				t.Fatalf("Decode error %v reports the range verdict before the CRC", err)
+			}
+		})
 	}
 }
 
