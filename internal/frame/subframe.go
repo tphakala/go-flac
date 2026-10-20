@@ -13,11 +13,11 @@ import (
 
 // errSubframeOutOfRange is the deferral signal for a subframe, or a stereo
 // channel computed from subframes, that restored to a sample outside its bit
-// depth, or whose Rice residual left the signed 32-bit range. The subframe is still read to its end, so Decode can finish the frame
-// and report this only once the frame CRC-16 has matched (a corrupted frame must
-// keep reporting ErrCRCMismatch). It wraps the public sentinel so it classifies
-// correctly if it ever escapes. It is a package-level value so deferring it
-// allocates nothing.
+// depth, or whose Rice residual left the signed 32-bit range. The subframe is
+// still read to its end, so Decode can finish the frame and report this only once
+// the frame CRC-16 has matched (a corrupted frame must keep reporting
+// ErrCRCMismatch). It wraps the public sentinel so it classifies correctly if it
+// ever escapes. It is a package-level value so deferring it allocates nothing.
 var errSubframeOutOfRange = fmt.Errorf("frame: subframe sample outside its bit depth: %w", flac.ErrSampleOutOfRange)
 
 // decodeSubframe decodes one subframe of len(dst) samples at the given effective
@@ -42,10 +42,11 @@ func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
 // check covers every FIXED order (order 0 residuals are bounded by the 32-bit
 // limit but can still leave a narrower effective width) and LPC; CONSTANT,
 // VERBATIM and warm-up samples are read with ReadSigned at the effective width
-// and fit by construction. Checking each subframe, not only the final output, also makes the
-// verdict independent of the LPC restore route: the int32-accumulating and int64
-// kernels agree up to and including the first sample outside the width (the
-// prediction history is in range until then, FuzzI32LPCNarrow pins it), and any
+// and fit by construction. Checking each subframe, not only the final output,
+// also makes the verdict independent of the LPC restore route: the
+// int32-accumulating and int64 kernels agree up to and including the first sample
+// outside the width (the prediction history is in range until then,
+// FuzzI32LPCNarrow pins it), and any
 // stored sample outside the width is rejected, so the later, route-dependent
 // values are never returned. On the int32 path (bps 24 or less) the check sees
 // samples as stored: when LPCRestoreNarrowSafe fails, i32.LPCRestore stores
