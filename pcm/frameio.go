@@ -3,8 +3,10 @@ package pcm
 import (
 	"bytes"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"hash"
+	"io"
 
 	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/bitio"
@@ -360,7 +362,8 @@ func NewFrameDecoder(streamInfo []byte) (*FrameDecoder, error) {
 // little-endian PCM and returns the block size in inter-channel samples. The
 // returned slice aliases an internal buffer reused across calls; the caller copies
 // it before the next call. It does not retain f after it returns. It rejects a
-// frame whose channel count disagrees with the STREAMINFO.
+// frame whose channel count disagrees with the STREAMINFO. A frame cut short
+// returns an error wrapping flac.ErrTruncatedStream.
 func (d *FrameDecoder) DecodeInterleaved(f []byte) (pcm []byte, blockSize int, err error) {
 	d.rd.Reset(f)
 	d.br.Reset(&d.rd)
@@ -370,6 +373,11 @@ func (d *FrameDecoder) DecodeInterleaved(f []byte) (pcm []byte, blockSize int, e
 	// keep that whole buffer alive. br keeps only its own copy of the bytes.
 	d.rd.Reset(nil)
 	if err != nil {
+		// f is the whole frame, so running out of bytes means it was cut short. An
+		// empty f gives a clean io.EOF rather than io.ErrUnexpectedEOF.
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			err = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, err)
+		}
 		return nil, 0, fmt.Errorf("go-flac/pcm: FrameDecoder.DecodeInterleaved: %w", err)
 	}
 	// frame.Decode resolves a frame header's "from STREAMINFO" (0) rate/bit-depth
