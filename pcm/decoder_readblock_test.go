@@ -79,7 +79,7 @@ func TestDecoderReadsSourceInLargeBlocks(t *testing.T) {
 		if _, err := d.SeekToSample(50000); err != nil {
 			t.Fatalf("SeekToSample: %v", err)
 		}
-		src.reads = 0 // count only the reads the rebuilt reader issues
+		src.reads = 0 // count only the reads the reused reader issues after the seek
 		drain(t, d)
 		if src.reads > maxReads {
 			t.Errorf("post-seek decode issued %d reads, want <= %d", src.reads, maxReads)
