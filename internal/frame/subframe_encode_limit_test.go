@@ -51,6 +51,12 @@ func TestPlanSubframe64ResidualLimit(t *testing.T) {
 		{"32-bit step", stepSignal(n, math.MinInt32, math.MaxInt32), 32, true},
 		{"33-bit side step", stepSignal(n, -(1<<32 - 1), 1<<32-1), 33, true},
 		{"32-bit sine with trailing spike", spike, 32, true},
+		// A first-order step of exactly 2^31-1 is legal; -2^31 and 2^31 are not. One
+		// sample of each step is odd so the samples have no common wasted bits, which
+		// would shrink the residual before the check.
+		{"32-bit step by 2^31-1", stepSignal(n, -1, math.MaxInt32-1), 32, false},
+		{"32-bit step by -2^31", stepSignal(n, math.MaxInt32, -1), 32, true},
+		{"33-bit step by 2^31", stepSignal(n, -1, math.MaxInt32), 33, true},
 		{"32-bit ramp", ramp, 32, false},
 		{"32-bit sine", sine, 32, false},
 	}
