@@ -461,7 +461,8 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	fixedBits := hdrBits + fOrder*eff + fResBits
 	verbatimBits := hdrBits + len(s)*eff
 
-	best := subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+	verbatim := subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+	best := verbatim
 	if fixedBits < best.bits {
 		best = subframePlan{kind: 2, order: fOrder, wasted: wasted, bits: fixedBits, cand: idx}
 	}
@@ -485,7 +486,7 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 		res := c.ensureRes64(len(s) - best.order)
 		lpc.ComputeFixedResiduals64(res, shifted, best.order)
 		if !residualsInRange(res) {
-			return subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+			return verbatim
 		}
 		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
@@ -499,7 +500,7 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 		// intact here (chooseLPCPlan64 is the last pass to touch it). Byte-identical.
 		copy(res, ws.costRes64[:len(s)-best.order])
 		if !residualsInRange(res) {
-			return subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+			return verbatim
 		}
 		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
