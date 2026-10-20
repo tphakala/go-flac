@@ -64,7 +64,7 @@ func pcm32(n int, chans ...func(i int) int32) []byte {
 // Direction (a) of the wide-depth cross-validation.
 func TestWideEncodeValidatedByFlac(t *testing.T) {
 	flacBin := flacAtLeast14(t)
-	// The step and spike rows give FIXED and LPC residuals of 2^32 or more (and a
+	// The step and spike rows give FIXED and LPC residuals of 2^31 or more (and a
 	// 33-bit side channel for the stereo ones), which RFC 9639 section 9.2.7.3
 	// forbids and libFLAC rejects, so the encoder must fall back to verbatim.
 	const n = 4096 + 999
