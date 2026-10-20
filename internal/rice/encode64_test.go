@@ -27,7 +27,7 @@ func TestEncodeResidual64WideRoundTrip(t *testing.T) {
 	for i := range res {
 		res[i] = int64(i) - 8
 	}
-	res[7] = (1 << 33) - 1 // 34-bit zigzag, un-escape-able
+	res[7] = 1<<31 - 1 // 32-bit zigzag, wider than the 31 bits an escape partition holds
 	bw := bitio.NewWriter()
 	bw.Reset()
 	var sc Scratch

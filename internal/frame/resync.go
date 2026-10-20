@@ -28,8 +28,8 @@ const (
 // begins with 0xFF followed by a byte matching b&0xFE == 0xF8 (14-bit sync + reserved
 // 0 bit). Each candidate is fully decoded so CRC-16 rejects a false sync inside
 // residual data. A candidate that fails its CRCs or format checks, or decodes to a
-// sample outside the frame bit depth (flac.ErrSampleOutOfRange), is skipped like a
-// false sync. It returns the start offset within data, the byte length of the
+// sample outside the frame bit depth or a Rice residual outside the signed 32-bit
+// range (flac.ErrSampleOutOfRange), is skipped like a false sync. It returns the start offset within data, the byte length of the
 // decoded frame, and a result code.
 //
 // r is scratch: it is Reset for each candidate. Callers that scan repeatedly (the

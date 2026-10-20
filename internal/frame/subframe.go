@@ -1,6 +1,7 @@
 package frame
 
 import (
+	"errors"
 	"fmt"
 
 	flac "github.com/tphakala/go-flac"
@@ -12,7 +13,7 @@ import (
 
 // errSubframeOutOfRange is the deferral signal for a subframe, or a stereo
 // channel computed from subframes, that restored to a sample outside its bit
-// depth. The subframe is still read to its end, so Decode can finish the frame
+// depth, or whose Rice residual left the signed 32-bit range. The subframe is still read to its end, so Decode can finish the frame
 // and report this only once the frame CRC-16 has matched (a corrupted frame must
 // keep reporting ErrCRCMismatch). It wraps the public sentinel so it classifies
 // correctly if it ever escapes. It is a package-level value so deferring it
@@ -30,14 +31,18 @@ func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
 }
 
 // decodeSubframeT decodes one subframe into dst. A FIXED or LPC subframe that
-// restores to a sample outside its effective bit depth returns
+// restores to a sample outside its effective bit depth, or whose Rice residual is
+// outside the signed 32-bit range (rice.DecodeResidual), returns
 // errSubframeOutOfRange, after the whole subframe has been read.
 //
-// The check runs on the restored samples before the wasted-bits shift, so the
-// shift cannot wrap an out-of-range value back into range. It covers every FIXED
-// order (order 0 takes unbounded residuals too) and LPC; CONSTANT, VERBATIM and
-// warm-up samples are read with ReadSigned at the effective width and fit by
-// construction. Checking each subframe, not only the final output, also makes the
+// The sample check runs on the restored samples before the wasted-bits shift, so
+// the shift cannot wrap an out-of-range value back into range. The residual bound
+// is applied by rice.DecodeResidual before the restore, so a residual too large
+// for int32 is never restored into samples that could look in range. The sample
+// check covers every FIXED order (order 0 residuals are bounded by the 32-bit
+// limit but can still leave a narrower effective width) and LPC; CONSTANT,
+// VERBATIM and warm-up samples are read with ReadSigned at the effective width
+// and fit by construction. Checking each subframe, not only the final output, also makes the
 // verdict independent of the LPC restore route: the int32-accumulating and int64
 // kernels agree up to and including the first sample outside the width (the
 // prediction history is in range until then, FuzzI32LPCNarrow pins it), and any
@@ -96,7 +101,7 @@ func decodeSubframeT[T rice.Sample](br *bitio.Reader, dst []T, bps int) error {
 		if err := decodeWarmup(br, dst, order, effBps); err != nil {
 			return err
 		}
-		if err := rice.DecodeResidual(br, dst, len(dst), order); err != nil {
+		if err := decodeResidual(br, dst, order); err != nil {
 			return err
 		}
 		restoreFixed(dst, order)
@@ -121,6 +126,18 @@ func decodeSubframeT[T rice.Sample](br *bitio.Reader, dst []T, bps int) error {
 		}
 	}
 	return nil
+}
+
+// decodeResidual reads the Rice residual of a FIXED or LPC subframe and maps a
+// residual outside the signed 32-bit range to errSubframeOutOfRange, so both
+// subframe kinds defer the verdict the same way. Any other error is returned
+// unchanged.
+func decodeResidual[T rice.Sample](br *bitio.Reader, dst []T, order int) error {
+	err := rice.DecodeResidual(br, dst, len(dst), order)
+	if err != nil && errors.Is(err, rice.ErrResidualRange) {
+		return errSubframeOutOfRange
+	}
+	return err
 }
 
 // inRange reports whether every sample of s fits a signed bits-wide value. The
@@ -210,7 +227,7 @@ func decodeLPC[T rice.Sample](br *bitio.Reader, dst []T, order, bps int) error {
 		}
 		coeffs[i] = int32(c)
 	}
-	if err := rice.DecodeResidual(br, dst, len(dst), order); err != nil {
+	if err := decodeResidual(br, dst, order); err != nil {
 		return err
 	}
 	restoreLPC(dst, coeffs, int(shiftSigned), order, bps)

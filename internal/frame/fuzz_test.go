@@ -14,6 +14,10 @@ func FuzzDecode(f *testing.F) {
 	for _, c := range rangeCases() {
 		f.Add(c.bytes())
 	}
+	// The oversized-residual fixtures steer it toward long Rice quotients.
+	for _, c := range residualRangeCases() {
+		f.Add(c.bytes())
+	}
 	si := flac.StreamInfo{SampleRate: 44100, Channels: 2, BitDepth: 16}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		br := bitio.NewReader(bytes.NewReader(data))
