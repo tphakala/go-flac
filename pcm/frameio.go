@@ -364,8 +364,8 @@ func NewFrameDecoder(streamInfo []byte) (*FrameDecoder, error) {
 // it before the next call. It does not retain f after it returns. It rejects a
 // frame whose channel count disagrees with the STREAMINFO. A frame cut short
 // returns an error wrapping flac.ErrTruncatedStream. A frame whose decoded
-// samples fall outside its bit depth returns an error wrapping
-// flac.ErrSampleOutOfRange.
+// samples fall outside its bit depth, or whose Rice residual is outside the
+// signed 32-bit range, returns an error wrapping flac.ErrSampleOutOfRange.
 func (d *FrameDecoder) DecodeInterleaved(f []byte) (pcm []byte, blockSize int, err error) {
 	d.rd.Reset(f)
 	d.br.Reset(&d.rd)

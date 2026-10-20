@@ -48,7 +48,7 @@ func TestWritePlannedCombinePathsRoundTrip(t *testing.T) {
 }
 
 // TestWritePlanned64CombinePathsRoundTrip is the int64 analogue, also exercising a
-// residual wider than 32 bits at a small parameter (large quotient fallback).
+// residual whose Rice code is wider than 32 bits (large quotient fallback).
 func TestWritePlanned64CombinePathsRoundTrip(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -57,9 +57,10 @@ func TestWritePlanned64CombinePathsRoundTrip(t *testing.T) {
 	}{
 		{"combineSmallQuotient", []int64{0, 1, -1, 2, -2, 3, -3, 4}, 3},
 		{"fallbackLargeQuotient", []int64{0, 1, -1, 100, -100, 0, 2, -2}, 0},
-		// A >32-bit value at a large parameter stays in the combined path (small
-		// quotient), exercising a wide combined WriteBits width (~47 bits here).
-		{"wideValueCombined", []int64{0, 1, -1, (1 << 33) - 1, -2, 0, 2, -2}, 30},
+		// The largest positive residual at a large parameter stays in the combined
+		// path (small quotient, q=3 at k=30), exercising a combined WriteBits width
+		// of 34 bits, wider than 32.
+		{"wideValueCombined", []int64{0, 1, -1, 1<<31 - 1, -2, 0, 2, -2}, 30},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

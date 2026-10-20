@@ -85,11 +85,12 @@ func (h *header) channels() int {
 // Decode decodes exactly one frame from br into dst. dst.Channels is grown/reused
 // to hold the frame's channels at its block size.
 //
-// A frame is accepted only when its header CRC-8 and frame CRC-16 match and every
-// decoded sample fits the frame bit depth. The checks run in that order: a
-// subframe or stereo channel found out of range is remembered while the frame is
-// read to its end, and flac.ErrSampleOutOfRange is returned only after the stored
-// CRC-16 has matched. A frame with a damaged CRC therefore reports
+// A frame is accepted only when its header CRC-8 and frame CRC-16 match, every
+// Rice residual is within the signed 32-bit range and every decoded sample fits
+// the frame bit depth. The checks run in that order: a subframe or stereo channel
+// found out of range, or a residual outside the 32-bit range, is remembered while
+// the frame is read to its end, and flac.ErrSampleOutOfRange is returned only
+// after the stored CRC-16 has matched. A frame with a damaged CRC therefore reports
 // flac.ErrCRCMismatch whatever its samples decode to.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	// The CRC tap is a reusable, non-closure tap living on the Frame, so decoding a
@@ -132,8 +133,9 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	if hdr.channelAssignment <= 7 {
 		bps := hdr.bitsPerSample
 		if bps >= 25 {
-			// Wide path: residuals can exceed int32, so decode each channel in int64
-			// scratch then narrow to the int32 output (a valid sample fits int32).
+			// Wide path: predictions and restored sums can exceed int32, so decode
+			// each channel in int64 scratch then narrow to the int32 output (a valid
+			// sample fits int32).
 			if cap(dst.work64[0]) < hdr.blockSize {
 				dst.work64[0] = make([]int64, hdr.blockSize)
 			}
@@ -187,7 +189,7 @@ func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 		return fmt.Errorf("frame: CRC-16 %#x != %#x: %w", stored, computed, flac.ErrCRCMismatch)
 	}
 	if outOfRange {
-		return fmt.Errorf("frame: decoded sample outside the %d-bit range: %w", hdr.bitsPerSample, flac.ErrSampleOutOfRange)
+		return fmt.Errorf("frame: sample or Rice residual out of range in a %d-bit frame: %w", hdr.bitsPerSample, flac.ErrSampleOutOfRange)
 	}
 
 	dst.BlockSize = hdr.blockSize
