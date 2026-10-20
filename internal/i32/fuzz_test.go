@@ -225,6 +225,28 @@ func FuzzI32LPCNarrow(f *testing.F) {
 		inPlace := slices.Clone(res)
 		LPCRestoreNarrow(inPlace, inPlace, coeffs, shift)
 		equalI32(t, "LPCRestoreNarrow in place", inPlace, samples)
+
+		// Unconstrained residuals: the warm-up stays within bps (as a decoded
+		// subframe's does) but the rest is raw, so restored samples may leave bps.
+		// The two kernels must still agree up to and including the first sample
+		// outside bps, because their histories are in range until then and the
+		// int32 sum is exact for an in-range history. The frame decoder
+		// (decodeSubframeT in internal/frame) rejects any subframe with such a
+		// sample, so it never returns the later, route-dependent values.
+		wild := slices.Clone(v)
+		copy(wild, samples[:order])
+		wide := make([]int32, n)
+		LPCRestore(wide, wild, coeffs, shift)
+		narrow := make([]int32, n)
+		LPCRestoreNarrow(narrow, wild, coeffs, shift)
+		through := n
+		for i := order; i < n; i++ {
+			if wide[i]<<(32-bps)>>(32-bps) != wide[i] {
+				through = i + 1
+				break
+			}
+		}
+		equalI32(t, "LPCRestoreNarrow vs LPCRestore up to the first out-of-range sample", narrow[:through], wide[:through])
 	})
 }
 

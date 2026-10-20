@@ -39,7 +39,9 @@ streams and exposes the audio as interleaved little-endian PCM through `io.Reade
 and `io.WriterTo`. It is validated bit-exactly against the IETF FLAC test corpus
 (every `subset` file's decoded-audio MD5 matches its STREAMINFO signature),
 byte-for-byte against the reference libFLAC `flac -d`, and fuzzed for
-panic-freedom. The decoder uses a 64-bit bulk-refill bit reader with no
+panic-freedom. A frame that passes its CRC checks but decodes to a sample outside
+its bit depth is rejected with `flac.ErrSampleOutOfRange`, as libFLAC rejects it.
+The decoder uses a 64-bit bulk-refill bit reader with no
 per-byte interface dispatch and allocates only a single reusable 64 KiB read
 buffer per stream, so a file can be passed without a `bufio` wrapper (which
 would also hide `io.Seeker` and disable `SeekToSample`).

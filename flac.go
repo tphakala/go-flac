@@ -25,6 +25,14 @@ var (
 	// STREAMINFO declares (an inter-frame cut on a zero-MD5 stream), or a frame body
 	// was cut short. Mid-frame truncation wraps io.ErrUnexpectedEOF.
 	ErrTruncatedStream = errors.New("go-flac: truncated stream")
+	// ErrSampleOutOfRange means a frame passed its CRC checks but decoded to a
+	// sample outside its bit depth: a subframe sample outside the width that
+	// subframe is coded at, or a stereo-decoded sample outside the frame's bit
+	// depth. A conforming encoder never produces such a frame. libFLAC rejects
+	// them too (it compares each decoded sample with the frame bit depth), so the
+	// decoder reports it instead of returning samples that depend on the
+	// arithmetic route taken.
+	ErrSampleOutOfRange = errors.New("go-flac: decoded sample outside the frame bit depth")
 	// ErrInvalidSeek means SeekToSample was called with a negative sample index.
 	ErrInvalidSeek = errors.New("go-flac: invalid seek (negative sample index)")
 )
