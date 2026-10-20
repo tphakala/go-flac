@@ -300,6 +300,33 @@ func TestFrameDecoderErrors(t *testing.T) {
 			t.Error("expected a channel-count mismatch error decoding a mono frame as stereo")
 		}
 	})
+
+	t.Run("truncated", func(t *testing.T) {
+		// A frame cut short reports ErrTruncatedStream, as the streaming Decoder does,
+		// and keeps the underlying io error in the chain.
+		cfg := Config{SampleRate: 48000, Channels: 2, BitDepth: 16, CompressionLevel: 5}
+		frames, _, enc := collectFrames(t, cfg, genPCM(cfg, 4096))
+		dec, err := NewFrameDecoder(enc.StreamInfoBytes())
+		if err != nil {
+			t.Fatalf("NewFrameDecoder: %v", err)
+		}
+		f := frames[0]
+		for _, tc := range []struct {
+			name    string
+			in      []byte
+			wantErr error
+		}{
+			{"empty", nil, io.EOF},
+			{"inside header", f[:3], io.ErrUnexpectedEOF},
+			{"inside subframe", f[:len(f)/2], io.ErrUnexpectedEOF},
+			{"missing crc16", f[:len(f)-2], io.ErrUnexpectedEOF},
+		} {
+			_, _, err := dec.DecodeInterleaved(tc.in)
+			if !errors.Is(err, flac.ErrTruncatedStream) || !errors.Is(err, tc.wantErr) {
+				t.Errorf("%s: err = %v, want ErrTruncatedStream wrapping %v", tc.name, err, tc.wantErr)
+			}
+		}
+	})
 }
 
 // TestFrameDecoderRecoversAfterBadFrame checks that a rejected frame leaves nothing
