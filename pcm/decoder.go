@@ -46,7 +46,7 @@ type Decoder struct {
 	bytesPS    int          // bytes per sample = ceil(bps/8)
 	md5        hash.Hash
 	decoded    uint64 // inter-channel samples decoded so far
-	seeked     bool   // a seek happened; disables MD5 + truncation checks
+	seeked     bool   // a seek happened; disables the end-of-stream MD5 and sample-count checks
 	skipMD5    bool   // caller opted out of MD5 hashing + verification (SkipMD5Verification)
 	convertTo  int    // WithConvertTo target bit depth, valid only when convertSet
 	convertSet bool   // WithConvertTo was given for this NewDecoder or Reset call
@@ -333,20 +333,33 @@ const probeChunkDefault = 1 << 18 // 256 KiB
 // frame would otherwise drive the probe window to the whole stream.
 const maxProbeWindow = 1 << 24 // 16 MiB
 
+// errSeekFrameCut is the seek failure for a target the source cuts off partway
+// through a frame. It wraps io.ErrUnexpectedEOF as decodeNextFrame does for the
+// same cut, and is a package value so a failed seek allocates no error.
+var errSeekFrameCut = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpectedEOF)
+
 // SeekToSample positions the decoder so the next Read/WriteTo yields audio starting at
 // sampleIndex. It requires the source to be an io.Seeker. It returns the sample index
 // positioned at (== sampleIndex on success). Seeking to or past a known TotalSamples,
-// or past the true end of an unknown-length stream, positions at end-of-stream and
+// or past the last frame of an unknown-length stream, positions at end-of-stream and
 // returns the stream's total sample count (the next read is io.EOF). A negative index
 // returns ErrInvalidSeek; a non-seekable source returns ErrSeekUnsupported.
 //
+// When the source ends inside a frame, after its first two bytes, a seek below any known
+// TotalSamples whose target lies in that frame (or, for an unknown-length stream,
+// anywhere past the last complete frame) returns an error wrapping
+// flac.ErrTruncatedStream and io.ErrUnexpectedEOF. A target in an earlier, complete
+// frame still lands, and reading on reports the truncation when it reaches the cut
+// frame.
+//
 // A seek that fails after those two argument checks leaves the decoder in a hard-failed
 // state, whether the failure came from the source (an I/O error while probing) or from
-// the stream itself (a frame that will not decode at the landing offset). The error is
-// sticky, so a subsequent Read or WriteTo returns it rather than resuming from an
-// indeterminate position. Retrying the seek, once the condition that caused it is gone,
-// clears the state. ErrInvalidSeek and ErrSeekUnsupported are argument and capability
-// errors that touch no state, so they leave the decoder readable.
+// the stream itself (a frame that will not decode at the landing offset, or a frame the
+// source cuts short). The error is sticky, so a subsequent Read or WriteTo returns it
+// rather than resuming from an indeterminate position. Retrying the seek, once the
+// condition that caused it is gone, clears the state. ErrInvalidSeek and
+// ErrSeekUnsupported are argument and capability errors that touch no state, so they
+// leave the decoder readable.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
@@ -406,17 +419,19 @@ func (d *Decoder) seekFailed(err error) (int64, error) {
 }
 
 // searchFrame returns the byte offset and first sample of the frame containing target.
-// landStart < 0 means target is past the stream end; endSample is then the total
-// number of samples in the stream (last frame first sample + its block size).
+// landStart < 0 means the source ends cleanly with no frame at or after lo containing
+// target; endSample is then the end of the last frame the linear scan decoded (0 if it
+// decoded none). A frame the source ends inside, after its first two bytes, returns
+// errSeekFrameCut.
 func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample int64, err error) {
 	const linearWindow = 1 << 16 // bytes; below this, scan forward frame by frame
 	for hi-lo > linearWindow {
 		mid := lo + (hi-lo)/2
-		start, end, ok, perr := d.probe(mid)
+		start, end, res, perr := d.probe(mid)
 		if perr != nil {
 			return 0, 0, 0, perr
 		}
-		if !ok { // no valid frame in [mid, hi): search lower
+		if res != frame.FrameFound { // no complete frame in [mid, hi): search lower
 			hi = mid
 			continue
 		}
@@ -437,11 +452,14 @@ func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample in
 	// Linear scan the small remaining window.
 	b := lo
 	for {
-		start, end, ok, perr := d.probe(b)
+		start, end, res, perr := d.probe(b)
 		if perr != nil {
 			return 0, 0, 0, perr
 		}
-		if !ok { // reached EOF without containing frame: target is past the true end
+		if res == frame.FrameTruncated { // the source ends inside this frame
+			return 0, 0, 0, errSeekFrameCut
+		}
+		if res != frame.FrameFound { // reached EOF without containing frame: target is past the true end
 			return -1, 0, endSample, nil
 		}
 		f := d.firstSample(&d.probeFrame)
@@ -466,15 +484,17 @@ func (d *Decoder) firstSample(fr *frame.Frame) int64 {
 }
 
 // probe finds the first CRC-16-valid frame, with all samples inside its bit depth,
-// at or after absolute offset b, decoding it into d.probeFrame. It returns the frame's absolute start and end offsets, or ok=false
-// when no complete frame remains before streamEnd. It does not disturb d.br.
-func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
+// at or after absolute offset b, decoding it into d.probeFrame. res is FrameFound with
+// the frame's absolute start and end offsets; FrameTruncated when a frame starts but the
+// source ends inside it; or FrameNotFound when no frame remains before streamEnd, or the
+// probe gave up at maxProbeWindow. It does not disturb d.br.
+func (d *Decoder) probe(b int64) (start, end int64, res frame.FindResult, err error) {
 	window := max(int64(2*d.maxFrame), probeChunkDefault)
 	window = min(window, maxProbeWindow)
 	for b < d.streamEnd {
 		n := min(d.streamEnd-b, window)
 		if _, err = d.rs.Seek(b, io.SeekStart); err != nil {
-			return 0, 0, false, err
+			return 0, 0, frame.FrameNotFound, err
 		}
 		if int64(cap(d.probeBuf)) < n {
 			d.probeBuf = make([]byte, n)
@@ -482,43 +502,47 @@ func (d *Decoder) probe(b int64) (start, end int64, ok bool, err error) {
 		buf := d.probeBuf[:n]
 		rn, rerr := io.ReadFull(d.rs, buf)
 		if rerr != nil && !errors.Is(rerr, io.ErrUnexpectedEOF) && !errors.Is(rerr, io.EOF) {
-			return 0, 0, false, rerr
+			return 0, 0, frame.FrameNotFound, rerr
 		}
 		buf = buf[:rn] // only the bytes actually read; the reused buffer tail is stale
 		// A short read means the source ended before the measured streamEnd (truncated
 		// since NewDecoder measured it), so this is the physical end of the stream.
 		atEnd := b+int64(rn) >= d.streamEnd || int64(rn) < n
-		s, consumed, res := frame.FindNextFrame(&d.resyncR, buf, d.info, &d.probeFrame)
-		switch res {
+		s, consumed, found := frame.FindNextFrame(&d.resyncR, buf, d.info, &d.probeFrame)
+		switch found {
 		case frame.FrameFound:
-			return b + int64(s), b + int64(s+consumed), true, nil
+			return b + int64(s), b + int64(s+consumed), frame.FrameFound, nil
 		case frame.FrameTruncated:
-			if atEnd || window >= maxProbeWindow {
-				// At the true EOF, or no complete frame fits the bounded probe window (a
-				// real FLAC frame is far smaller, so this is malformed): give up.
-				return 0, 0, false, nil
+			if atEnd {
+				// A frame starts but the physical end of the source cuts it short.
+				return 0, 0, frame.FrameTruncated, nil
+			}
+			if window >= maxProbeWindow {
+				// No complete frame fits the bounded probe window (a real FLAC frame is
+				// far smaller, so this is malformed): give up.
+				return 0, 0, frame.FrameNotFound, nil
 			}
 			window *= 2 // grow and retry from the same base
 			window = min(window, maxProbeWindow)
 		default: // FrameNotFound
 			if atEnd {
-				return 0, 0, false, nil
+				return 0, 0, frame.FrameNotFound, nil
 			}
 			b += int64(rn) - 1 // advance, overlapping 1 byte for a sync straddling the boundary
 		}
 	}
-	return 0, 0, false, nil
+	return 0, 0, frame.FrameNotFound, nil
 }
 
 // ensureNominalBlock discovers the fixed-blocksize nominal block size from the first
 // audio frame when STREAMINFO did not record a max block size (MaxBlock == 0). For a
 // variable-blocksize stream the nominal block size is unused, so it is left at zero.
 func (d *Decoder) ensureNominalBlock() error {
-	_, _, ok, err := d.probe(d.audioStart)
+	_, _, res, err := d.probe(d.audioStart)
 	if err != nil {
 		return err
 	}
-	if ok && !d.probeFrame.VariableBlockSize {
+	if res == frame.FrameFound && !d.probeFrame.VariableBlockSize {
 		d.nominalBlock = d.probeFrame.BlockSize
 	}
 	return nil
