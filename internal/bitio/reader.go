@@ -7,20 +7,29 @@ import (
 	"math/bits"
 )
 
-// readBlock is the owned read-buffer size. It is large enough to amortize the
-// underlying src.Read and feed the 64-bit bulk-load fast path many consecutive
-// whole words, yet small enough to stay L1/L2 friendly.
+// readBlock is the default owned read-buffer size, used by NewReader and by Reset on
+// a zero-value Reader. It is large enough to amortize the underlying src.Read and feed
+// the 64-bit bulk-load fast path many consecutive whole words, yet small enough to
+// stay L1/L2 friendly. That is why it stays small: a reader built for every frame
+// pays for it on every construction. A long-lived reader over a file asks for a
+// larger block through NewReaderSize.
 const readBlock = 1 << 13 // 8 KiB
+
+// minReadBlock is the smallest block NewReaderSize allows. readMore compacts an
+// unconsumed tail of up to 8 bytes to the front of the buffer before it reads, so
+// a block must be larger than that for a refill to make progress; 16 is also
+// bufio's minimum.
+const minReadBlock = 16
 
 // maxEmptyReads bounds consecutive (0, nil) reads from a pathological source, the
 // same guard bufio.Reader applies, so readMore cannot spin forever.
 const maxEmptyReads = 100
 
 // Reader reads bits MSB-first from an underlying byte source, the bit order FLAC
-// uses. It owns all buffering: bytes are pulled from src into an 8 KiB block and
-// shifted into a 64-bit accumulator, so there is no per-byte interface dispatch.
-// A tap, if set, receives every fully consumed source byte in order, which the
-// frame decoder uses to feed CRC hashers.
+// uses. It owns all buffering: bytes are pulled from src into a block (readBlock by
+// default, see NewReaderSize) and shifted into a 64-bit accumulator, so there is no
+// per-byte interface dispatch. A tap, if set, receives every fully consumed source
+// byte in order, which the frame decoder uses to feed CRC hashers.
 //
 // Bit layout is LEFT-ALIGNED, MSB-first: the nbits valid bits occupy the TOP
 // nbits positions of acc (bits [64-nbits, 63]); all lower bits are zero. This
@@ -37,38 +46,44 @@ type Reader struct {
 	rtap    ByteRangeTap // set when tap also folds byte ranges in bulk; drives deferred mode
 	tapCur  int          // buf index of the next byte to hand to tap (consumption cursor)
 	loaded  int64        // cumulative bytes ever shifted from buf into acc (never reset)
-	basePos int64        // absolute byte-offset seed (NewReaderAt); 0 for NewReader
+	basePos int64        // absolute byte-offset seed (ResetAt); 0 for NewReader
 	err     error        // sticky; once set, stays set
 }
 
 // NewReader returns a Reader over r. The Reader reads directly from r in blocks
 // into its own buffer; r need not be buffered or implement io.ByteReader.
 func NewReader(r io.Reader) *Reader {
-	return &Reader{src: r, buf: make([]byte, readBlock)}
+	return NewReaderSize(r, readBlock)
 }
 
-// NewReaderAt returns a Reader over r whose byte counter starts at pos. Use it
-// after seeking the underlying source to an absolute offset, so BytesRead stays
-// absolute.
-func NewReaderAt(r io.Reader, pos int64) *Reader {
-	br := NewReader(r)
-	br.basePos = pos
-	return br
+// NewReaderSize is NewReader with an explicit block size, clamped up to
+// minReadBlock. Each refill asks r for up to size bytes, so over a source where
+// every Read is a system call a larger block means fewer calls. Reset and ResetAt
+// keep the size.
+func NewReaderSize(r io.Reader, size int) *Reader {
+	return &Reader{src: r, buf: make([]byte, max(size, minReadBlock))}
 }
 
 // Reset re-points the Reader at src and clears all read state, reusing the owned
-// buffer so a caller that processes many short sources (the frame resync scan,
-// which tries decoding at each candidate offset) does not reallocate the 8 KiB
-// block each time. The tap is cleared and basePos reset to 0; reinstall a tap
-// with SetTap or SetTapper if one is needed.
+// buffer at the size the Reader was built with (a zero-value Reader gets readBlock),
+// so a caller that rebinds many sources (the frame resync scan, which tries decoding
+// at each candidate offset, or a pooled decoder) never reallocates the block. The tap
+// is cleared and basePos reset to 0; reinstall a tap with SetTap or SetTapper if one
+// is needed.
 func (r *Reader) Reset(src io.Reader) {
 	buf := r.buf
-	if cap(buf) >= readBlock {
-		buf = buf[:readBlock] // reuse the existing backing array
-	} else {
+	if len(buf) == 0 {
 		buf = make([]byte, readBlock)
 	}
 	*r = Reader{src: src, buf: buf}
+}
+
+// ResetAt is Reset for a src that has just been seeked to the absolute offset pos:
+// BytesRead then counts from pos instead of 0, so it stays absolute. The buffer is
+// reused as in Reset.
+func (r *Reader) ResetAt(src io.Reader, pos int64) {
+	r.Reset(src)
+	r.basePos = pos
 }
 
 // ByteTap receives every fully consumed source byte while installed. It is the

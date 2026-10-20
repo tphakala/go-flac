@@ -107,12 +107,15 @@ func sameErrKind(a, b error) bool {
 // identically up to that point), and BytesRead is compared only at byte boundaries,
 // where the value is exact for every reader design.
 func FuzzReaderOracle(f *testing.F) {
-	f.Add([]byte{0x00}, uint16(0))
-	f.Add([]byte{0xFF, 0xAB, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}, uint16(0xB1A5))
-	f.Add(make([]byte, 40), uint16(0x1234))                      // long zero runs for ReadUnary
-	f.Add([]byte{0x12, 0x00, 0x00, 0x00, 0x80, 0xFF}, uint16(7)) // unary spanning bytes then bits
-	f.Fuzz(func(t *testing.T, data []byte, seed uint16) {
-		r := NewReader(bytes.NewReader(data))
+	f.Add([]byte{0x00}, uint16(0), uint8(0))
+	f.Add([]byte{0xFF, 0xAB, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0}, uint16(0xB1A5), uint8(3))
+	f.Add(make([]byte, 40), uint16(0x1234), uint8(0))                                       // long zero runs for ReadUnary, 16-byte block
+	f.Add(bytes.Repeat([]byte{0xA5, 0x3C, 0x0F, 0xF0, 0x81}, 60), uint16(0x5EED), uint8(1)) // 300 bytes through 17-byte blocks
+	f.Add([]byte{0x12, 0x00, 0x00, 0x00, 0x80, 0xFF}, uint16(7), uint8(0))                  // unary spanning bytes then bits
+	f.Fuzz(func(t *testing.T, data []byte, seed uint16, blk uint8) {
+		// Small blocks (16..271 bytes) make the script cross many refills, which the
+		// default block would only do for inputs over 8 KiB.
+		r := NewReaderSize(bytes.NewReader(data), minReadBlock+int(blk))
 		o := newBitReadOracle(data)
 		rng := uint32(seed)*2654435761 + 1
 		next := func() uint32 { rng = rng*1664525 + 1013904223; return rng >> 8 }
