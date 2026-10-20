@@ -2,6 +2,7 @@ package pcm
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"runtime"
 	"testing"
@@ -23,8 +24,9 @@ func (c *readCountingSeeker) Read(p []byte) (int, error) {
 // TestDecoderReadsSourceInLargeBlocks pins the decoder's source read size. The
 // decoder reads the caller's source directly (no bufio), so each refill is one
 // Read call, which is one syscall on an *os.File. Each row covers one way the
-// decoder's reader is built: a fresh decoder, a Reset onto a decoder that already
-// owns a buffer, and the reader rebuilt after a seek. Decoding to the end also
+// decoder's reader is built or rebound: a fresh decoder, a Reset onto a decoder
+// that already owns a buffer, a seek that reuses the reader, and a seek that must
+// build a new one because a failed seek dropped it. Decoding to the end also
 // verifies the STREAMINFO MD5 on the first two rows, so frames that straddle 64
 // KiB refills are checked end to end.
 func TestDecoderReadsSourceInLargeBlocks(t *testing.T) {
@@ -81,6 +83,27 @@ func TestDecoderReadsSourceInLargeBlocks(t *testing.T) {
 		drain(t, d)
 		if src.reads > maxReads {
 			t.Errorf("post-seek decode issued %d reads, want <= %d", src.reads, maxReads)
+		}
+	})
+
+	t.Run("after_failed_seek", func(t *testing.T) {
+		src := newFailingSource(stream)
+		d, err := NewDecoder(src)
+		if err != nil {
+			t.Fatalf("NewDecoder: %v", err)
+		}
+		src.arm(0) // the seek's first source read fails and the decoder drops its reader
+		if _, err := d.SeekToSample(60000); !errors.Is(err, errSourceIO) {
+			t.Fatalf("SeekToSample err = %v, want errSourceIO", err)
+		}
+		src.disarm()
+		if _, err := d.SeekToSample(50000); err != nil {
+			t.Fatalf("retried SeekToSample: %v", err)
+		}
+		src.reads = 0 // count only the reads the rebuilt reader issues
+		drain(t, d)
+		if src.reads > maxReads {
+			t.Errorf("decode after a failed seek issued %d reads, want <= %d", src.reads, maxReads)
 		}
 	})
 }

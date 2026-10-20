@@ -18,6 +18,7 @@ type failingSource struct {
 	r     *bytes.Reader
 	armed bool
 	allow int // reads still permitted before the failure, once armed
+	reads int // Read calls made, failed ones included
 }
 
 func newFailingSource(data []byte) *failingSource {
@@ -33,6 +34,7 @@ func (f *failingSource) arm(allow int) {
 func (f *failingSource) disarm() { f.armed = false }
 
 func (f *failingSource) Read(p []byte) (int, error) {
+	f.reads++
 	if f.armed {
 		if f.allow <= 0 {
 			return 0, errSourceIO
