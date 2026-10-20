@@ -327,6 +327,34 @@ func TestFrameDecoderErrors(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("complete but corrupt", func(t *testing.T) {
+		// A full-length frame that fails validation keeps its own sentinel and is not
+		// reported as truncated.
+		cfg := Config{SampleRate: 48000, Channels: 2, BitDepth: 16, CompressionLevel: 5}
+		frames, _, enc := collectFrames(t, cfg, genPCM(cfg, 4096))
+		dec, err := NewFrameDecoder(enc.StreamInfoBytes())
+		if err != nil {
+			t.Fatalf("NewFrameDecoder: %v", err)
+		}
+		badSync := bytes.Clone(frames[0])
+		badSync[0] = 0
+		badCRC := bytes.Clone(frames[0])
+		badCRC[len(badCRC)-1] ^= 0xFF
+		for _, tc := range []struct {
+			name    string
+			in      []byte
+			wantErr error
+		}{
+			{"bad sync", badSync, flac.ErrUnsupported},
+			{"bad crc16", badCRC, flac.ErrCRCMismatch},
+		} {
+			_, _, err := dec.DecodeInterleaved(tc.in)
+			if !errors.Is(err, tc.wantErr) || errors.Is(err, flac.ErrTruncatedStream) {
+				t.Errorf("%s: err = %v, want %v and not ErrTruncatedStream", tc.name, err, tc.wantErr)
+			}
+		}
+	})
 }
 
 // TestFrameDecoderRecoversAfterBadFrame checks that a rejected frame leaves nothing
