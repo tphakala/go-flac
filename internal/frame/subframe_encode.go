@@ -1,6 +1,7 @@
 package frame
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/tphakala/go-flac/internal/bitio"
@@ -429,7 +430,8 @@ func writeFixed64(bw *bitio.Writer, ws *Workspace, s []int64, bps int, plan *sub
 // planSubframe64 chooses the cheapest subframe encoding for int64 samples at the
 // given bps and stores the winning predictor's residuals and chosen Rice plan into
 // workspace slot idx. Mirrors planSubframe exactly: same accounting, same
-// tie-breaking rules.
+// tie-breaking rules. Unlike planSubframe, it returns the verbatim plan when the
+// winning FIXED or LPC residual is outside the RFC 9639 range (see residualsInRange).
 //
 //nolint:dupl // intentional: typed parallel of planSubframe
 func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window []float64) subframePlan {
@@ -459,7 +461,8 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	fixedBits := hdrBits + fOrder*eff + fResBits
 	verbatimBits := hdrBits + len(s)*eff
 
-	best := subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+	verbatim := subframePlan{kind: 1, wasted: wasted, bits: verbatimBits, cand: idx}
+	best := verbatim
 	if fixedBits < best.bits {
 		best = subframePlan{kind: 2, order: fOrder, wasted: wasted, bits: fixedBits, cand: idx}
 	}
@@ -474,11 +477,17 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 	}
 
 	// Carry the winner's residuals and chosen Rice plan into slot idx (wide path).
+	// A residual outside the RFC 9639 section 9.2.7.3 range makes the subframe
+	// illegal, so the winner falls back to verbatim, which stores samples and
+	// cannot violate it.
 	switch best.kind {
 	case 2: // fixed
 		c := &ws.cand[idx]
 		res := c.ensureRes64(len(s) - best.order)
 		lpc.ComputeFixedResiduals64(res, shifted, best.order)
+		if !residualsInRange(res) {
+			return verbatim
+		}
 		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
@@ -490,12 +499,29 @@ func planSubframe64(ws *Workspace, idx int, s []int64, bps int, p Params, window
 		// prefix); copy it instead of re-running ComputeLPCResiduals64. costRes64 is
 		// intact here (chooseLPCPlan64 is the last pass to touch it). Byte-identical.
 		copy(res, ws.costRes64[:len(s)-best.order])
+		if !residualsInRange(res) {
+			return verbatim
+		}
 		_, plans, paramBits, total := rice.PlanResidualInt64(res, len(s), best.order, p.MaxPartitionOrder, &ws.rice)
 		c.plans = append(c.plans[:0], plans...)
 		best.riceParamBits = paramBits
 		best.bits = hdrBits + best.order*eff + 4 + 5 + best.order*p.LPCPrecision + total
 	}
 	return best
+}
+
+// residualsInRange reports whether every residual is within [-(2^31-1), 2^31-1],
+// the range RFC 9639 section 9.2.7.3 allows (an absolute value of 2^31 or more
+// is illegal, so -2^31 is not accepted). A residual whose zigzag value needs more
+// than 32 bits makes libFLAC 1.5.0 report a lost sync (measured with flac -t),
+// so the wide path must not write one.
+func residualsInRange(res []int64) bool {
+	for _, r := range res {
+		if r < -math.MaxInt32 || r > math.MaxInt32 {
+			return false
+		}
+	}
+	return true
 }
 
 // writeSubframe64 writes s according to plan for int64 samples. Mirrors writeSubframe.

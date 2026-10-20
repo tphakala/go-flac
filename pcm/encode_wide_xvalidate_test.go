@@ -3,6 +3,8 @@ package pcm
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +43,17 @@ func flacAtLeast14(t *testing.T) string {
 	return ""
 }
 
+// pcm32 interleaves one little-endian 32-bit signed sample stream per generator.
+func pcm32(n int, chans ...func(i int) int32) []byte {
+	out := make([]byte, 0, n*len(chans)*4)
+	for i := range n {
+		for _, f := range chans {
+			out = binary.LittleEndian.AppendUint32(out, uint32(f(i)))
+		}
+	}
+	return out
+}
+
 // TestWideEncodeValidatedByFlac encodes PCM with our encoder at wide bit depths,
 // then asserts the reference flac binary both verifies the stream (flac -t) and,
 // for byte-aligned depths (8/16/24/32), decodes it back to the exact source PCM
@@ -51,13 +64,53 @@ func flacAtLeast14(t *testing.T) string {
 // Direction (a) of the wide-depth cross-validation.
 func TestWideEncodeValidatedByFlac(t *testing.T) {
 	flacBin := flacAtLeast14(t)
-	cfgs := []Config{
+	// The step and spike rows give FIXED and LPC residuals of 2^31 or more (and a
+	// 33-bit side channel for the stereo ones), which RFC 9639 section 9.2.7.3
+	// forbids and libFLAC rejects, so the encoder must fall back to verbatim.
+	const n = 4096 + 999
+	step := func(i int) int32 {
+		if i < n/2 {
+			return math.MinInt32
+		}
+		return math.MaxInt32
+	}
+	stepInv := func(i int) int32 { return ^step(i) } // MaxInt32 then MinInt32
+	spikeHi := func(i int) int32 {
+		if i == 77 {
+			return math.MaxInt32
+		}
+		return 5
+	}
+	spikeLo := func(i int) int32 {
+		if i == 77 {
+			return math.MinInt32
+		}
+		return 3
+	}
+	type wideCase struct {
+		cfg      Config
+		pcmBytes []byte
+	}
+	genCfgs := []Config{
 		{SampleRate: 48000, BitDepth: 32, Channels: 2, CompressionLevel: 5},
 		{SampleRate: 96000, BitDepth: 28, Channels: 2, CompressionLevel: 8},
 		{SampleRate: 48000, BitDepth: 32, Channels: 1, CompressionLevel: 3},
 	}
-	for _, cfg := range cfgs {
-		pcmBytes := genPCM(cfg, 4096+999)
+	cases := make([]wideCase, 0, len(genCfgs)+12)
+	for _, cfg := range genCfgs {
+		cases = append(cases, wideCase{cfg, genPCM(cfg, n)})
+	}
+	for _, level := range []int{0, 1, 3, 8} {
+		mono := Config{SampleRate: 48000, BitDepth: 32, Channels: 1, CompressionLevel: level}
+		stereo := Config{SampleRate: 48000, BitDepth: 32, Channels: 2, CompressionLevel: level}
+		cases = append(cases,
+			wideCase{mono, pcm32(n, step)},
+			wideCase{stereo, pcm32(n, step, stepInv)},
+			wideCase{stereo, pcm32(n, spikeHi, spikeLo)},
+		)
+	}
+	for _, tc := range cases {
+		cfg, pcmBytes := tc.cfg, tc.pcmBytes
 		path := encodeToFile(t, cfg, pcmBytes)
 
 		// flac -t validates sync, CRC-8/16, MD5, and decodability for all depths.

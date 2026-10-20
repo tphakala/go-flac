@@ -57,8 +57,10 @@ func EncodeFrame(bw *bitio.Writer, ws *Workspace, p Params, si flac.StreamInfo, 
 	case nch == 2 && p.Stereo != StereoIndependent && bps >= 25:
 		encodeStereo64(bw, ws, p, si.SampleRate, bps, bs, ch[0], ch[1], frameNum)
 	case bps >= 25:
-		// Wide path (independent, mono, or multichannel): residuals can exceed int32,
-		// so upcast each channel to int64 before planning and writing.
+		// Wide path (independent, mono, or multichannel): upcast each channel to
+		// int64 before planning and writing, since predictor arithmetic at 25 to 32
+		// bps needs the headroom. planSubframe64 keeps the residuals it plans within
+		// RFC 9639's range.
 		window := ws.window(p, bs)
 		writeFrameHeader(bw, bs, nch-1, si.SampleRate, bps, frameNum)
 		buf := ws.ensureL64(bs) // reuse l64; never runs in same frame as encodeStereo64

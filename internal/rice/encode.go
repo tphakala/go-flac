@@ -24,8 +24,10 @@ func zigzag(r int32) uint64 {
 	return uint64(uint32((r << 1) ^ (r >> 31)))
 }
 
-// zigzag64 maps a signed int64 residual (up to ~34 bits at 32-bps) to the unsigned
-// value the bitstream stores. Inverse of DecodeResidual's de-interleave.
+// zigzag64 maps a signed int64 residual to the unsigned value the bitstream
+// stores. Inverse of DecodeResidual's de-interleave. It accepts any int64; the
+// frame encoder keeps the residuals it passes within RFC 9639's range
+// (planSubframe64, residualsInRange).
 func zigzag64(r int64) uint64 {
 	return uint64((r << 1) ^ (r >> 63))
 }
