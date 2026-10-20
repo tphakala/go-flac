@@ -40,8 +40,9 @@ and `io.WriterTo`. It is validated bit-exactly against the IETF FLAC test corpus
 (every `subset` file's decoded-audio MD5 matches its STREAMINFO signature),
 byte-for-byte against the reference libFLAC `flac -d`, and fuzzed for
 panic-freedom. The decoder uses a 64-bit bulk-refill bit reader with no
-per-byte interface dispatch and allocates only a single reusable read buffer
-per stream.
+per-byte interface dispatch and allocates only a single reusable 64 KiB read
+buffer per stream, so a file can be passed without a `bufio` wrapper (which
+would also hide `io.Seeker` and disable `SeekToSample`).
 
 `pcm.NewEncoder` encodes interleaved little-endian PCM to FLAC. It supports bit
 depths 4-32, constant/verbatim/fixed and LPC predictors, full four-way stereo

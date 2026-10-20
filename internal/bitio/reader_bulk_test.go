@@ -313,12 +313,26 @@ func TestByteAlignedWithBufferedWholeBytes(t *testing.T) {
 	}
 }
 
-// TestNewReaderAtSeekAndRead confirms basePos is added to the consumed count so an
-// absolute byte position after a seek stays correct.
-func TestNewReaderAtSeekAndRead(t *testing.T) {
-	r := NewReaderAt(bytes.NewReader([]byte{0x55, 0x66, 0x77, 0x88}), 100)
-	if _, err := r.ReadBits(16); err != nil { // consume two bytes
+// TestResetAtSeedsAbsolutePosition confirms ResetAt seeds the byte counter from
+// pos and clears everything read before it, so BytesRead stays absolute after the
+// source is seeked. The reader first consumes source A, so a ResetAt that left the
+// cumulative loaded count or A's buffered bytes in place would report 104/106 or
+// return A's bytes; a fresh reader would not expose either.
+func TestResetAtSeedsAbsolutePosition(t *testing.T) {
+	r := NewReader(bytes.NewReader([]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE}))
+	if _, err := r.ReadBits(32); err != nil { // loaded becomes non-zero
 		t.Fatal(err)
+	}
+	r.ResetAt(bytes.NewReader([]byte{0x55, 0x66, 0x77, 0x88}), 100)
+	if got := r.BytesRead(); got != 100 {
+		t.Fatalf("BytesRead after ResetAt=%d, want 100", got)
+	}
+	got, err := r.ReadBits(16) // consume two bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := uint64(0x5566); got != want {
+		t.Fatalf("ReadBits(16) after ResetAt=%#x, want %#x (source B's first bytes)", got, want)
 	}
 	if got := r.BytesRead(); got != 102 {
 		t.Fatalf("BytesRead=%d, want 102 (100 base + 2 consumed)", got)
@@ -493,56 +507,88 @@ func TestSetTapUnalignedReseat(t *testing.T) {
 	}
 }
 
-// TestReaderResetReusesBuffer proves Reset (a) produces reads correct and
-// independent of the prior source's state, (b) resets BytesRead to 0, and (c)
-// reuses the owned 8 KiB buffer's backing array instead of reallocating it, which
-// the frame resync scan (many short candidate sources) relies on.
-func TestReaderResetReusesBuffer(t *testing.T) {
-	srcA := make([]byte, readBlock)
-	for i := range srcA {
-		srcA[i] = 0xAA
+// TestReaderResetKeepsBlockSizeAndBuffer proves Reset (a) produces reads correct
+// and independent of the prior source's state, (b) resets BytesRead to 0, (c)
+// keeps the block size the reader was built with, and (d) reuses the owned
+// buffer's backing array instead of reallocating it, which the frame resync scan
+// (many short candidate sources) relies on. The block is observed as the size of
+// the request one refill makes to the source, and each row hard-codes it so a
+// change to the default block or to what Reset keeps cannot move the expectation
+// with it.
+func TestReaderResetKeepsBlockSizeAndBuffer(t *testing.T) {
+	rows := []struct {
+		name      string
+		build     func(src io.Reader) *Reader
+		wantBlock int
+	}{
+		{"NewReader", NewReader, 8 << 10},
+		{"NewReaderSize64K", func(src io.Reader) *Reader { return NewReaderSize(src, 64<<10) }, 64 << 10},
+		{"ZeroValueReset", func(src io.Reader) *Reader {
+			r := new(Reader)
+			r.Reset(src)
+			return r
+		}, 8 << 10},
 	}
 	srcB := []byte{0x12, 0x34, 0x56, 0x78}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			// 3 blocks, so source A cannot end inside the first refill.
+			a := &countingReader{inner: bytes.NewReader(make([]byte, 3*tc.wantBlock))}
+			r := tc.build(a)
+			if _, err := r.ReadBits(32); err != nil { // pulls one block into buf/acc
+				t.Fatal(err)
+			}
+			if a.read != int64(tc.wantBlock) {
+				t.Fatalf("first refill requested %d bytes, want %d", a.read, tc.wantBlock)
+			}
+			if got := r.BytesRead(); got != 4 {
+				t.Fatalf("BytesRead before Reset=%d, want 4", got)
+			}
 
-	r := NewReader(bytes.NewReader(srcA))
-	if _, err := r.ReadBits(32); err != nil { // pulls a whole block into buf/acc
-		t.Fatal(err)
-	}
-	if got := r.BytesRead(); got != 4 {
-		t.Fatalf("BytesRead before Reset=%d, want 4", got)
-	}
+			r.Reset(bytes.NewReader(srcB))
+			if got := r.BytesRead(); got != 0 {
+				t.Fatalf("BytesRead after Reset=%d, want 0", got)
+			}
+			got, err := r.ReadBits(32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := uint64(0x12345678); got != want {
+				t.Fatalf("ReadBits(32) after Reset=%#x, want %#x (must be independent of source A)", got, want)
+			}
+			if got := r.BytesRead(); got != 4 {
+				t.Fatalf("BytesRead after read=%d, want 4", got)
+			}
 
-	r.Reset(bytes.NewReader(srcB))
-	if got := r.BytesRead(); got != 0 {
-		t.Fatalf("BytesRead after Reset=%d, want 0", got)
-	}
-	got, err := r.ReadBits(32)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := uint64(0x12345678); got != want {
-		t.Fatalf("ReadBits(32) after Reset=%#x, want %#x (must be independent of source A)", got, want)
-	}
-	if got := r.BytesRead(); got != 4 {
-		t.Fatalf("BytesRead after read=%d, want 4", got)
-	}
+			// The block size must survive Reset: a source with more than one block
+			// of data shows the request size of the next refill.
+			b := &countingReader{inner: bytes.NewReader(make([]byte, 4*tc.wantBlock))}
+			r.Reset(b)
+			if _, err := r.ReadBits(8); err != nil {
+				t.Fatal(err)
+			}
+			if b.read != int64(tc.wantBlock) {
+				t.Fatalf("refill after Reset requested %d bytes, want %d (Reset must keep the block size)", b.read, tc.wantBlock)
+			}
 
-	// Warm up once so any one-time setup cost is outside the measured loop, then
-	// measure a Reset+small-read cycle. A regression that reallocates the owned
-	// buffer inside Reset adds one extra allocation per cycle on top of the
-	// bytes.Reader that bytes.NewReader allocates each iteration, so the count-based
-	// threshold below distinguishes reuse (1) from reallocation (2+).
-	r.Reset(bytes.NewReader(srcB))
-	if _, err := r.ReadBits(8); err != nil {
-		t.Fatal(err)
-	}
-	allocs := testing.AllocsPerRun(20, func() {
-		r.Reset(bytes.NewReader(srcB))
-		if _, err := r.ReadBits(8); err != nil {
-			t.Errorf("ReadBits(8) in AllocsPerRun err=%v", err)
-		}
-	})
-	if allocs > 1 {
-		t.Fatalf("Reset+read allocated %.1f objects/op, want <= 1 (owned buffer must be reused, not reallocated)", allocs)
+			// Warm up once so any one-time setup cost is outside the measured loop, then
+			// measure a Reset+small-read cycle. A regression that reallocates the owned
+			// buffer inside Reset adds one extra allocation per cycle on top of the
+			// bytes.Reader that bytes.NewReader allocates each iteration, so the count-based
+			// threshold below distinguishes reuse (1) from reallocation (2+).
+			r.Reset(bytes.NewReader(srcB))
+			if _, err := r.ReadBits(8); err != nil {
+				t.Fatal(err)
+			}
+			allocs := testing.AllocsPerRun(20, func() {
+				r.Reset(bytes.NewReader(srcB))
+				if _, err := r.ReadBits(8); err != nil {
+					t.Errorf("ReadBits(8) in AllocsPerRun err=%v", err)
+				}
+			})
+			if allocs > 1 {
+				t.Fatalf("Reset+read allocated %.1f objects/op, want <= 1 (owned buffer must be reused, not reallocated)", allocs)
+			}
+		})
 	}
 }

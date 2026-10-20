@@ -18,6 +18,11 @@ import (
 // the stream's own bit depth unless WithConvertTo selects another (see OutputBitDepth).
 // It implements io.Reader and io.WriterTo, and offers sample-accurate SeekToSample;
 // seeking requires the underlying source to be an io.Seeker.
+//
+// The decoder buffers reads from its source itself, 64 KiB at a time, so an *os.File
+// can be passed directly. Do not wrap a source in a bufio.Reader when seeking is
+// needed: bufio.Reader does not implement io.Seeker, so SeekToSample would return
+// flac.ErrSeekUnsupported.
 type Decoder struct {
 	br       *bitio.Reader
 	rs       io.ReadSeeker // non-nil when the source is seekable
@@ -182,11 +187,11 @@ func (d *Decoder) init(op string, r io.Reader) error {
 		}
 	}
 
-	// Reuse the owned 8 KiB read buffer and the MD5 hash across streams. Both are
+	// Reuse the owned read buffer (streamReadBlock) and the MD5 hash across streams. Both are
 	// nil on a zero-value (pooled) decoder, and br is nil after a failed seek
 	// (seekFailed), so fall back to construction in those cases.
 	if d.br == nil {
-		d.br = bitio.NewReader(r)
+		d.br = bitio.NewReaderSize(r, streamReadBlock)
 	} else {
 		d.br.Reset(r)
 	}
@@ -311,6 +316,14 @@ func (d *Decoder) Tags() []flac.Tag {
 	}
 	return tags
 }
+
+// streamReadBlock is the size of the decoder's read buffer, which is also the size of
+// each request it makes to the caller's source. The source is read directly with no
+// bufio in between, so on an *os.File each refill is one read call; 64 KiB cuts a
+// 1.2 MB file from about 150 calls to about 20. Decode throughput measured the same
+// as with the 8 KiB bitio default (BenchmarkDecodeReuse). Only this reader uses it:
+// the per-frame and resync readers keep the bitio default.
+const streamReadBlock = 64 << 10 // 64 KiB
 
 // probeChunkDefault sizes seek-probe reads when STREAMINFO max frame size is unknown.
 const probeChunkDefault = 1 << 18 // 256 KiB
@@ -517,7 +530,10 @@ func (d *Decoder) land(landStart, target, fs int64) (int64, error) {
 	if _, err := d.rs.Seek(landStart, io.SeekStart); err != nil {
 		return 0, err
 	}
-	d.br = bitio.NewReaderAt(d.rs, landStart)
+	if d.br == nil { // dropped by seekFailed
+		d.br = bitio.NewReaderSize(d.rs, streamReadBlock)
+	}
+	d.br.ResetAt(d.rs, landStart)
 	d.seeked = true
 	d.done = false
 	d.err = nil

@@ -9,7 +9,9 @@
 // io.Reader and io.WriterTo. SeekToSample provides sample-accurate random
 // access when the source implements io.Seeker. A SEEKTABLE block in the stream
 // accelerates seeks by narrowing the binary search; plain binary search is the
-// fallback when no table is present.
+// fallback when no table is present. The decoder buffers its own reads, 64 KiB
+// at a time, so pass an *os.File directly; a bufio.Reader wrapper would hide the
+// io.Seeker and make SeekToSample return flac.ErrSeekUnsupported.
 //
 // Native output is right-aligned at the stream's own bit depth in ceil(bits/8)
 // bytes per sample, so 12-bit audio arrives in 2-byte samples at 12-bit scale.

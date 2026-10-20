@@ -135,16 +135,3 @@ func TestReaderBytesRead(t *testing.T) {
 		t.Fatalf("BytesRead after 24 bits = %d, want 3", got)
 	}
 }
-
-func TestNewReaderAtSeedsCounter(t *testing.T) {
-	r := NewReaderAt(bytes.NewReader([]byte{0x55, 0x66}), 100)
-	if got := r.BytesRead(); got != 100 {
-		t.Fatalf("seeded BytesRead = %d, want 100", got)
-	}
-	if _, err := r.ReadBits(8); err != nil {
-		t.Fatal(err)
-	}
-	if got := r.BytesRead(); got != 101 {
-		t.Fatalf("BytesRead after one byte = %d, want 101", got)
-	}
-}
