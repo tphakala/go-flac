@@ -356,9 +356,10 @@ var errSeekFrameCut = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpe
 // state, whether the failure came from the source (an I/O error while probing) or from
 // the stream itself (a frame that will not decode at the landing offset, or a frame the
 // source cuts short). The error is sticky, so a subsequent Read or WriteTo returns it
-// rather than resuming from an indeterminate position. Retrying the seek, once the condition that caused it is gone,
-// clears the state. ErrInvalidSeek and ErrSeekUnsupported are argument and capability
-// errors that touch no state, so they leave the decoder readable.
+// rather than resuming from an indeterminate position. Retrying the seek, once the
+// condition that caused it is gone, clears the state. ErrInvalidSeek and
+// ErrSeekUnsupported are argument and capability errors that touch no state, so they
+// leave the decoder readable.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
 	if !d.seekable {
 		return 0, flac.ErrSeekUnsupported
@@ -420,7 +421,8 @@ func (d *Decoder) seekFailed(err error) (int64, error) {
 // searchFrame returns the byte offset and first sample of the frame containing target.
 // landStart < 0 means the source ends cleanly with no frame at or after lo containing
 // target; endSample is then the end of the last frame the linear scan decoded (0 if it
-// decoded none). A frame the source ends inside, after its first two bytes, returns errSeekFrameCut.
+// decoded none). A frame the source ends inside, after its first two bytes, returns
+// errSeekFrameCut.
 func (d *Decoder) searchFrame(target, lo, hi int64) (landStart, fs, endSample int64, err error) {
 	const linearWindow = 1 << 16 // bytes; below this, scan forward frame by frame
 	for hi-lo > linearWindow {
