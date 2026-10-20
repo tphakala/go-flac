@@ -10,9 +10,9 @@ import (
 // readBlock is the default owned read-buffer size, used by NewReader and by Reset on
 // a zero-value Reader. It is large enough to amortize the underlying src.Read and feed
 // the 64-bit bulk-load fast path many consecutive whole words, yet small enough to
-// stay L1/L2 friendly. That is why it stays small: readers made per frame or per
-// resync candidate pay for it on every construction. A long-lived reader over a file
-// asks for a larger block through NewReaderSize.
+// stay L1/L2 friendly. That is why it stays small: a reader built for every frame
+// pays for it on every construction. A long-lived reader over a file asks for a
+// larger block through NewReaderSize.
 const readBlock = 1 << 13 // 8 KiB
 
 // minReadBlock is the smallest block NewReaderSize allows. readMore compacts an
@@ -27,9 +27,9 @@ const maxEmptyReads = 100
 
 // Reader reads bits MSB-first from an underlying byte source, the bit order FLAC
 // uses. It owns all buffering: bytes are pulled from src into a block (readBlock by
-// default, see NewReaderSize) and shifted into a 64-bit accumulator, so there is no per-byte interface dispatch.
-// A tap, if set, receives every fully consumed source byte in order, which the
-// frame decoder uses to feed CRC hashers.
+// default, see NewReaderSize) and shifted into a 64-bit accumulator, so there is no
+// per-byte interface dispatch. A tap, if set, receives every fully consumed source
+// byte in order, which the frame decoder uses to feed CRC hashers.
 //
 // Bit layout is LEFT-ALIGNED, MSB-first: the nbits valid bits occupy the TOP
 // nbits positions of acc (bits [64-nbits, 63]); all lower bits are zero. This

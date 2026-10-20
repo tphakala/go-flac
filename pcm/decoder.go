@@ -317,8 +317,8 @@ func (d *Decoder) Tags() []flac.Tag {
 	return tags
 }
 
-// streamReadBlock is the size of the decoder's read buffer, which is also the size of
-// each request it makes to the caller's source. The source is read directly with no
+// streamReadBlock is the size of the decoder's read buffer; each refill asks the
+// caller's source for up to that many bytes. The source is read directly with no
 // bufio in between, so on an *os.File each refill is one read call; 64 KiB cuts a
 // 1.2 MB file from about 150 calls to about 20. Decode throughput measured the same
 // as with the 8 KiB bitio default (BenchmarkDecodeReuse). Only this reader uses it:

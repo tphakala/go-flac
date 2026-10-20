@@ -316,8 +316,8 @@ func TestByteAlignedWithBufferedWholeBytes(t *testing.T) {
 // TestResetAtSeedsAbsolutePosition confirms ResetAt seeds the byte counter from
 // pos and clears everything read before it, so BytesRead stays absolute after the
 // source is seeked. The reader first consumes source A, so a ResetAt that left the
-// cumulative loaded count or A's buffered bytes in place would report 104/106 or
-// return A's bytes; a fresh reader would not expose either.
+// cumulative loaded count or A's buffered bytes in place would report a position
+// above pos or return A's bytes; a fresh reader would not expose either.
 func TestResetAtSeedsAbsolutePosition(t *testing.T) {
 	r := NewReader(bytes.NewReader([]byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE}))
 	if _, err := r.ReadBits(32); err != nil { // loaded becomes non-zero
