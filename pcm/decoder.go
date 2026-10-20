@@ -353,9 +353,9 @@ var errSeekFrameCut = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpe
 //
 // A seek that fails after those two argument checks leaves the decoder in a hard-failed
 // state, whether the failure came from the source (an I/O error while probing) or from
-// the stream itself (a frame that will not decode at the landing offset, or a frame the source cuts short). The error is
-// sticky, so a subsequent Read or WriteTo returns it rather than resuming from an
-// indeterminate position. Retrying the seek, once the condition that caused it is gone,
+// the stream itself (a frame that will not decode at the landing offset, or a frame the
+// source cuts short). The error is sticky, so a subsequent Read or WriteTo returns it
+// rather than resuming from an indeterminate position. Retrying the seek, once the condition that caused it is gone,
 // clears the state. ErrInvalidSeek and ErrSeekUnsupported are argument and capability
 // errors that touch no state, so they leave the decoder readable.
 func (d *Decoder) SeekToSample(sampleIndex int64) (int64, error) {
