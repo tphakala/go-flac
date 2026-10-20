@@ -15,9 +15,9 @@
 //
 // A frame that passes its CRC checks but decodes to a sample outside its bit
 // depth, or carries a Rice residual outside the signed 32-bit range, is rejected
-// with an error wrapping flac.ErrSampleOutOfRange. Like a CRC
-// failure it is sticky: Read and WriteTo deliver the frames before it, then keep
-// returning the error, and the one-shot DecodeInterleaved returns no data.
+// with an error wrapping flac.ErrSampleOutOfRange. Like a CRC failure it is
+// sticky: Read and WriteTo deliver the frames before it, then keep returning the
+// error, and the one-shot DecodeInterleaved returns no data.
 // SeekToSample skips such a frame as it skips one with a bad CRC.
 //
 // Native output is right-aligned at the stream's own bit depth in ceil(bits/8)

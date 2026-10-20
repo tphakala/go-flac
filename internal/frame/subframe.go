@@ -46,12 +46,12 @@ func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
 // also makes the verdict independent of the LPC restore route: the
 // int32-accumulating and int64 kernels agree up to and including the first sample
 // outside the width (the prediction history is in range until then,
-// FuzzI32LPCNarrow pins it), and any
-// stored sample outside the width is rejected, so the later, route-dependent
-// values are never returned. On the int32 path (bps 24 or less) the check sees
-// samples as stored: when LPCRestoreNarrowSafe fails, i32.LPCRestore stores
-// residual + int32(sum >> shift) (internal/i32/lpc.go:127-128), so a shifted sum
-// that leaves int32 wraps and can land back in range and pass. Whether every
+// FuzzI32LPCNarrow pins it), and any stored sample outside the width is rejected,
+// so the later, route-dependent values are never returned. On the int32 path (bps
+// 24 or less) the check sees samples as stored: when LPCRestoreNarrowSafe fails,
+// i32.LPCRestore stores residual + int32(sum >> shift)
+// (internal/i32/lpc.go:127-128), so a shifted sum that leaves int32 wraps and can
+// land back in range and pass. Whether every
 // kernel wraps it identically is NOT MEASURED. The 25 to 32 bit path restores
 // through lpc.RestoreLPC[int64] (internal/lpc/lpc.go:39), which stores the exact
 // int64 value, so the check sees it unwrapped.
