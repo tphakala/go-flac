@@ -115,3 +115,37 @@ func TestSeekIntoCutLastFrame(t *testing.T) {
 		})
 	}
 }
+
+// TestSeekPastEndUnknownLengthIntact pins the case the cut-frame error must stay
+// silent for: an intact unknown-length stream sought past its last frame still
+// positions at end-of-stream, returns the total sample count and reads io.EOF. The
+// trailing-bytes row ends the stream with bytes that hold no sync code, so the last
+// probe reads a non-empty tail and must report no frame rather than a cut one.
+func TestSeekPastEndUnknownLengthIntact(t *testing.T) {
+	const samples = 12000
+	for _, c := range []struct {
+		name     string
+		trailing []byte
+	}{
+		{"exact end", nil},
+		{"trailing bytes without a sync code", []byte{0x00, 0x01, 0x02}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			stream := append(encodeNoise(t, 2, 16, samples, false), c.trailing...)
+			dec, err := NewDecoder(bytes.NewReader(stream), SkipMD5Verification())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dec.Info().TotalSamples != 0 {
+				t.Fatalf("TotalSamples = %d, the stream must be unknown-length", dec.Info().TotalSamples)
+			}
+			landed, err := dec.SeekToSample(samples + 5000)
+			if err != nil || landed != samples {
+				t.Fatalf("SeekToSample past the end = (%d, %v), want (%d, nil)", landed, err, samples)
+			}
+			if n, rerr := dec.Read(make([]byte, 4)); n != 0 || !errors.Is(rerr, io.EOF) {
+				t.Fatalf("Read after the past-end seek = (%d, %v), want (0, io.EOF)", n, rerr)
+			}
+		})
+	}
+}
