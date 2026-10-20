@@ -102,8 +102,8 @@ func rangeCases() []rangeCase {
 		res[0] = delta
 		return res
 	}
-	// A block of zeros with one nonzero sample, and a constant block, in the widths
-	// the narrow (int32) and wide (int64) paths take.
+	// A block of zeros with one nonzero sample, in the widths the narrow (int32)
+	// and wide (int64) paths take, and a constant int64 block.
 	spike32 := func(idx int, v int32) []int32 {
 		s := make([]int32, n)
 		s[idx] = v
@@ -359,9 +359,10 @@ func rangeCases() []rangeCase {
 			},
 		},
 		{
-			// The out-of-range subframe skips the wasted-bits shift, so the derived
-			// channels see the unshifted value: 200 fits 16 bits (rebuilt l = r = 200
-			// is in range) but not the 8 effective bits.
+			// 200 fits 16 bits but not the 8 effective bits. A decoder that ignored the
+			// bad flag would rebuild l = r = 200 from sample 1, in range, because
+			// subframe.go returns at its range check (subframe.go:103) before the
+			// wasted-bits shift (subframe.go:118).
 			name: "mid/side mid beyond effective width, derived in range", bits: 16, chCode: chMidSide, reject: true,
 			build: func(bw *bitio.Writer) {
 				writeRawFixed(bw, 8, 8, []int64{0}, step1(200))
@@ -370,7 +371,7 @@ func rangeCases() []rangeCase {
 		},
 		{
 			// Side width is bps+1, so 8 wasted bits leave 9 effective bits; 400 is
-			// beyond them yet right = -400 is inside 16 bits.
+			// beyond them yet the rebuilt l = 200 and r = -200 are inside 16 bits.
 			name: "mid/side side beyond effective width, derived in range", bits: 16, chCode: chMidSide, reject: true,
 			build: func(bw *bitio.Writer) {
 				writeVerbatim(bw, make([]int32, n), 0, 16)
