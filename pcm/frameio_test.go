@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/md5"
 	"errors"
+	"io"
 	"testing"
 
+	flac "github.com/tphakala/go-flac"
 	"github.com/tphakala/go-flac/internal/meta"
 )
 
@@ -298,6 +300,94 @@ func TestFrameDecoderErrors(t *testing.T) {
 			t.Error("expected a channel-count mismatch error decoding a mono frame as stereo")
 		}
 	})
+}
+
+// TestFrameDecoderRecoversAfterBadFrame checks that a rejected frame leaves nothing
+// behind in the decoder's reused bit reader. A truncated frame leaves the reader with
+// a sticky EOF; a frame rejected at its sync code leaves the rest of its bytes
+// buffered. Either would fail or corrupt the next good frame if the reader were not
+// rebound on every call, and the round-trip test, which feeds only good frames,
+// cannot see it.
+func TestFrameDecoderRecoversAfterBadFrame(t *testing.T) {
+	cfg := Config{SampleRate: 48000, Channels: 2, BitDepth: 16, CompressionLevel: 5}
+	frames, _, enc := collectFrames(t, cfg, genRealisticPCM(cfg, encoderBlockSize))
+	good := frames[0]
+
+	ref, err := NewFrameDecoder(enc.StreamInfoBytes())
+	if err != nil {
+		t.Fatalf("NewFrameDecoder: %v", err)
+	}
+	want, _, err := ref.DecodeInterleaved(good)
+	if err != nil {
+		t.Fatalf("reference decode: %v", err)
+	}
+	want = bytes.Clone(want)
+
+	badSync := bytes.Clone(good)
+	badSync[0] = 0 // breaks the 14-bit sync code: rejected after two bytes
+
+	dec, err := NewFrameDecoder(enc.StreamInfoBytes())
+	if err != nil {
+		t.Fatalf("NewFrameDecoder: %v", err)
+	}
+	steps := []struct {
+		name    string
+		frame   []byte
+		wantErr error
+	}{
+		{"good", good, nil},
+		{"truncated", good[:len(good)/2], io.ErrUnexpectedEOF},
+		{"good after truncated", good, nil},
+		{"bad sync", badSync, flac.ErrUnsupported},
+		{"good after bad sync", good, nil},
+	}
+	for _, s := range steps {
+		out, _, err := dec.DecodeInterleaved(s.frame)
+		if s.wantErr != nil {
+			if !errors.Is(err, s.wantErr) {
+				t.Fatalf("%s: err = %v, want %v", s.name, err, s.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", s.name, err)
+		}
+		if !bytes.Equal(out, want) {
+			t.Fatalf("%s: decoded PCM differs from a fresh decoder's", s.name)
+		}
+	}
+}
+
+// TestFrameDecoderReleasesFrame checks that DecodeInterleaved keeps no reference to
+// the caller's frame once it returns, on success and on error. A demuxer often passes
+// a subslice of a large container buffer; holding it would keep that whole buffer
+// alive for as long as the decoder lives. The reader's own block is a copy, so the
+// bytes.Reader is the only place the caller's slice could stay; an empty Size means
+// it was dropped.
+func TestFrameDecoderReleasesFrame(t *testing.T) {
+	cfg := Config{SampleRate: 48000, Channels: 2, BitDepth: 16, CompressionLevel: 5}
+	frames, _, enc := collectFrames(t, cfg, genPCM(cfg, encoderBlockSize))
+	for _, tc := range []struct {
+		name     string
+		truncate bool
+	}{{"decoded", false}, {"rejected", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			dec, err := NewFrameDecoder(enc.StreamInfoBytes())
+			if err != nil {
+				t.Fatalf("NewFrameDecoder: %v", err)
+			}
+			in := frames[0]
+			if tc.truncate {
+				in = in[:len(in)/2]
+			}
+			if _, _, err := dec.DecodeInterleaved(in); (err != nil) != tc.truncate {
+				t.Fatalf("DecodeInterleaved err = %v, want error %v", err, tc.truncate)
+			}
+			if n := dec.rd.Size(); n != 0 {
+				t.Fatalf("decoder still holds %d bytes of the caller's frame after DecodeInterleaved returned", n)
+			}
+		})
+	}
 }
 
 // errTest is a package-local sentinel for the emit-error propagation test.
