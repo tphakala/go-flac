@@ -102,6 +102,23 @@ func rangeCases() []rangeCase {
 		res[0] = delta
 		return res
 	}
+	// A block of zeros with one nonzero sample, in the widths the narrow (int32)
+	// and wide (int64) paths take, and a constant int64 block.
+	spike32 := func(idx int, v int32) []int32 {
+		s := make([]int32, n)
+		s[idx] = v
+		return s
+	}
+	spike64 := func(idx int, v int64) []int64 {
+		s := zeros(n)
+		s[idx] = v
+		return s
+	}
+	rep64 := func(v int64) []int64 { return slices.Repeat([]int64{v}, n) }
+	// Expected output of an accept row whose channels are constant.
+	wantConst := func(l, r int32) [][]int32 {
+		return [][]int32{slices.Repeat([]int32{l}, n), slices.Repeat([]int32{r}, n)}
+	}
 	return []rangeCase{
 		{
 			name: "lpc narrow route", bits: 16, chCode: 0, reject: true,
@@ -323,6 +340,155 @@ func rangeCases() []rangeCase {
 				writeVerbatim64(bw, slices.Repeat([]int64{1}, n), 0, 29)
 			},
 		},
+		// The next nine reject rows leave every channel the output check inspects
+		// in range, so only the subframe verdict (the bad flag from decodePair)
+		// can reject the frame.
+		{
+			// Left is a subframe, never output-checked; side 40000 keeps right at 0.
+			name: "left/side left subframe out of range, right in range", bits: 16, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeRawFixed(bw, 0, 16, nil, spike64(3, 40000))
+				writeVerbatim(bw, spike32(3, 40000), 0, 17)
+			},
+		},
+		{
+			name: "right/side right subframe out of range, left in range", bits: 16, chCode: chRightSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim(bw, spike32(3, -40000), 0, 17)
+				writeRawFixed(bw, 0, 16, nil, spike64(3, 40000))
+			},
+		},
+		{
+			// 200 fits 16 bits but not the 8 effective bits. A decoder that ignored the
+			// bad flag would rebuild l = r = 200 from sample 1, in range, because
+			// subframe.go returns at its range check (subframe.go:103) before the
+			// wasted-bits shift (subframe.go:118).
+			name: "mid/side mid beyond effective width, derived in range", bits: 16, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeRawFixed(bw, 8, 8, []int64{0}, step1(200))
+				writeVerbatim(bw, make([]int32, n), 0, 17)
+			},
+		},
+		{
+			// Side width is bps+1, so 8 wasted bits leave 9 effective bits; 400 is
+			// beyond them yet the rebuilt l = 200 and r = -200 are inside 16 bits.
+			name: "mid/side side beyond effective width, derived in range", bits: 16, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim(bw, make([]int32, n), 0, 16)
+				writeRawFixed(bw, 8, 9, []int64{0}, step1(400))
+			},
+		},
+		{
+			name: "left/side side beyond effective width, derived in range", bits: 16, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim(bw, make([]int32, n), 0, 16)
+				writeRawFixed(bw, 8, 9, []int64{0}, step1(400))
+			},
+		},
+		{
+			// The wide path (bps 28) has its own subframe verdict.
+			name: "28-bit left/side left subframe out of range, right in range", bits: 28, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeRawFixed(bw, 0, 28, nil, spike64(3, 1<<27))
+				writeVerbatim64(bw, spike64(3, 1<<27), 0, 29)
+			},
+		},
+		{
+			name: "28-bit right/side right subframe out of range, left in range", bits: 28, chCode: chRightSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, spike64(3, -(1<<27)), 0, 29)
+				writeRawFixed(bw, 0, 28, nil, spike64(3, 1<<27))
+			},
+		},
+		{
+			name: "28-bit mid/side mid beyond effective width, derived in range", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeRawFixed(bw, 20, 8, []int64{0}, step1(200))
+				writeVerbatim64(bw, zeros(n), 0, 29)
+			},
+		},
+		{
+			name: "28-bit left/side side beyond effective width, derived in range", bits: 28, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, zeros(n), 0, 28)
+				writeRawFixed(bw, 20, 9, []int64{0}, step1(400))
+			},
+		},
+		// The wide decorrelators must keep a bad sample seen early in the block; the
+		// wide stereo rows above carry a constant bad block, where the last sample
+		// alone gives the same verdict.
+		{
+			name: "28-bit left/side single early overflow", bits: 28, chCode: chLeftSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, zeros(n), 0, 28)
+				writeVerbatim64(bw, spike64(0, -(1<<27)), 0, 29)
+			},
+		},
+		{
+			name: "28-bit right/side single early overflow", bits: 28, chCode: chRightSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, spike64(0, 1<<27), 0, 29)
+				writeVerbatim64(bw, zeros(n), 0, 28)
+			},
+		},
+		{
+			// mid 2^27-1 and side 1 make left 2^27 at sample 0 only.
+			name: "28-bit mid/side single early overflow", bits: 28, chCode: chMidSide, reject: true,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, spike64(0, 1<<27-1), 0, 28)
+				writeVerbatim64(bw, spike64(0, 1), 0, 29)
+			},
+		},
+		// Derived samples exactly on the wide limits -2^27 and 2^27-1 are accepted,
+		// per decorrelation mode and per derived channel.
+		{
+			name: "28-bit left/side right at minimum", bits: 28, chCode: chLeftSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, zeros(n), 0, 28)
+				writeVerbatim64(bw, rep64(1<<27), 0, 29)
+			},
+			want: wantConst(0, -(1 << 27)),
+		},
+		{
+			name: "28-bit left/side right at maximum", bits: 28, chCode: chLeftSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, zeros(n), 0, 28)
+				writeVerbatim64(bw, rep64(-(1<<27 - 1)), 0, 29)
+			},
+			want: wantConst(0, 1<<27-1),
+		},
+		{
+			name: "28-bit right/side left at minimum", bits: 28, chCode: chRightSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, rep64(-(1 << 27)), 0, 29)
+				writeVerbatim64(bw, zeros(n), 0, 28)
+			},
+			want: wantConst(-(1 << 27), 0),
+		},
+		{
+			name: "28-bit right/side left at maximum", bits: 28, chCode: chRightSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, rep64(1<<27-1), 0, 29)
+				writeVerbatim64(bw, zeros(n), 0, 28)
+			},
+			want: wantConst(1<<27-1, 0),
+		},
+		{
+			name: "28-bit mid/side both at minimum", bits: 28, chCode: chMidSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, rep64(-(1 << 27)), 0, 28)
+				writeVerbatim64(bw, zeros(n), 0, 29)
+			},
+			want: wantConst(-(1 << 27), -(1 << 27)),
+		},
+		{
+			name: "28-bit mid/side both at maximum", bits: 28, chCode: chMidSide,
+			build: func(bw *bitio.Writer) {
+				writeVerbatim64(bw, rep64(1<<27-1), 0, 28)
+				writeVerbatim64(bw, zeros(n), 0, 29)
+			},
+			want: wantConst(1<<27-1, 1<<27-1),
+		},
 	}
 }
 
@@ -366,11 +532,14 @@ func TestDecodeRejectsOutOfRangeSamples(t *testing.T) {
 // samples are out of range but whose CRC-16 is broken reports ErrCRCMismatch,
 // so a bit flip in a real stream keeps its corruption verdict. One frame per
 // place Decode defers the range verdict: independent narrow, stereo output
-// check, wide independent and wide stereo.
+// check, wide independent, wide stereo, and the stereo subframe verdict on the
+// narrow and wide paths.
 func TestDecodeRangeVerdictAfterCRC(t *testing.T) {
 	names := []string{
 		"lpc narrow route", "left/side right out of range",
 		"28-bit independent", "32-bit left/side narrowing wrap",
+		"left/side left subframe out of range, right in range",
+		"28-bit left/side left subframe out of range, right in range",
 	}
 	byName := map[string]rangeCase{}
 	for _, rc := range rangeCases() {
