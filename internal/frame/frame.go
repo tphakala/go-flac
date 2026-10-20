@@ -89,8 +89,8 @@ func (h *header) channels() int {
 // decoded sample fits the frame bit depth. The checks run in that order: a
 // subframe or stereo channel found out of range is remembered while the frame is
 // read to its end, and flac.ErrSampleOutOfRange is returned only after the stored
-// CRC-16 has matched. A corrupted frame therefore keeps reporting
-// flac.ErrCRCMismatch, which FindNextFrame relies on to classify false syncs.
+// CRC-16 has matched. A frame with a damaged CRC therefore reports
+// flac.ErrCRCMismatch whatever its samples decode to.
 func Decode(br *bitio.Reader, si flac.StreamInfo, dst *Frame) (err error) {
 	// The CRC tap is a reusable, non-closure tap living on the Frame, so decoding a
 	// frame allocates no tap closure (and nothing at all once its scratch has grown to

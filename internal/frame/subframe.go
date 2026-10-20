@@ -21,8 +21,17 @@ var errSubframeOutOfRange = fmt.Errorf("frame: subframe sample outside its bit d
 
 // decodeSubframe decodes one subframe of len(dst) samples at the given effective
 // bit depth into dst (int32 path). The int64 path is decodeSubframe64 below.
-// Both return errSubframeOutOfRange, after reading the whole subframe, when a
-// FIXED or LPC subframe restores to a sample outside its effective bit depth.
+func decodeSubframe(br *bitio.Reader, dst []int32, bps int) error {
+	return decodeSubframeT(br, dst, bps)
+}
+
+func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
+	return decodeSubframeT(br, dst, bps)
+}
+
+// decodeSubframeT decodes one subframe into dst. A FIXED or LPC subframe that
+// restores to a sample outside its effective bit depth returns
+// errSubframeOutOfRange, after the whole subframe has been read.
 //
 // The check runs on the restored samples before the wasted-bits shift, so the
 // shift cannot wrap an out-of-range value back into range. It covers every FIXED
@@ -40,14 +49,6 @@ var errSubframeOutOfRange = fmt.Errorf("frame: subframe sample outside its bit d
 // 2455 to 2470) and lets a crafted frame whose wasted-bits shift or 32-bit
 // arithmetic wraps back into range through. No conforming encoder writes such a
 // frame.
-func decodeSubframe(br *bitio.Reader, dst []int32, bps int) error {
-	return decodeSubframeT(br, dst, bps)
-}
-
-func decodeSubframe64(br *bitio.Reader, dst []int64, bps int) error {
-	return decodeSubframeT(br, dst, bps)
-}
-
 func decodeSubframeT[T rice.Sample](br *bitio.Reader, dst []T, bps int) error {
 	if pad, err := br.ReadBits(1); err != nil {
 		return err

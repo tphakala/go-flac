@@ -52,24 +52,6 @@ func writeRawLPC(bw *bitio.Writer, effBps int, warm []int64, shift int, coeffs [
 	writeEscapeResidual(bw, res)
 }
 
-// repeatI32 returns n copies of v.
-func repeatI32(v int32, n int) []int32 {
-	out := make([]int32, n)
-	for i := range out {
-		out[i] = v
-	}
-	return out
-}
-
-// repeatI64 returns n copies of v.
-func repeatI64(v int64, n int) []int64 {
-	out := make([]int64, n)
-	for i := range out {
-		out[i] = v
-	}
-	return out
-}
-
 // rangeCase is one hand-built CRC-valid frame. Every sample either fits its
 // bit depth (want is the expected output) or does not (reject).
 type rangeCase struct {
@@ -132,7 +114,7 @@ func rangeCases() []rangeCase {
 		{
 			name: "lpc int64 route", bits: 16, chCode: 0, reject: true,
 			build: func(bw *bitio.Writer) {
-				writeRawLPC(bw, 16, repeatI64(-32768, 4), 1, lpcWideRowCoeffs, zeros(n-4))
+				writeRawLPC(bw, 16, slices.Repeat([]int64{-32768}, 4), 1, lpcWideRowCoeffs, zeros(n-4))
 			},
 		},
 		{
@@ -171,23 +153,23 @@ func rangeCases() []rangeCase {
 		{
 			name: "left/side right out of range", bits: 16, chCode: chLeftSide, reject: true,
 			build: func(bw *bitio.Writer) {
-				writeVerbatim(bw, repeatI32(32767, n), 0, 16)
-				writeVerbatim(bw, repeatI32(-32768, n), 0, 17)
+				writeVerbatim(bw, slices.Repeat([]int32{32767}, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{-32768}, n), 0, 17)
 			},
 		},
 		{
 			name: "right/side left out of range", bits: 16, chCode: chRightSide, reject: true,
 			build: func(bw *bitio.Writer) {
-				writeVerbatim(bw, repeatI32(32767, n), 0, 17)
-				writeVerbatim(bw, repeatI32(32767, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{32767}, n), 0, 17)
+				writeVerbatim(bw, slices.Repeat([]int32{32767}, n), 0, 16)
 			},
 		},
 		{
 			// mid 32767 and side 1 rebuild left = (65535+1)>>1 = 32768.
 			name: "mid/side extreme", bits: 16, chCode: chMidSide, reject: true,
 			build: func(bw *bitio.Writer) {
-				writeVerbatim(bw, repeatI32(32767, n), 0, 16)
-				writeVerbatim(bw, repeatI32(1, n), 0, 17)
+				writeVerbatim(bw, slices.Repeat([]int32{32767}, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{1}, n), 0, 17)
 			},
 		},
 		{
@@ -195,7 +177,7 @@ func rangeCases() []rangeCase {
 			// subframe check (not the output check) failing on a stereo channel.
 			name: "side subframe beyond bps+1", bits: 16, chCode: chLeftSide, reject: true,
 			build: func(bw *bitio.Writer) {
-				writeVerbatim(bw, repeatI32(0, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{0}, n), 0, 16)
 				writeRawFixed(bw, 0, 17, []int64{0}, step1(70000))
 			},
 		},
@@ -213,17 +195,17 @@ func rangeCases() []rangeCase {
 				res[2] = -(1<<24 - 1) // 2^23-1 -> -2^23
 				writeRawFixed(bw, 0, 24, []int64{1<<23 - 2}, res)
 			},
-			want: [][]int32{append([]int32{1<<23 - 2, 1<<23 - 1, 1<<23 - 1}, repeatI32(-(1<<23), n-3)...)},
+			want: [][]int32{append([]int32{1<<23 - 2, 1<<23 - 1, 1<<23 - 1}, slices.Repeat([]int32{-(1 << 23)}, n-3)...)},
 		},
 		{
 			// side = -65535 is the minimum of the 17-bit side range; a side check at
 			// the frame depth (16 bits) would wrongly reject it.
 			name: "left/side minimum side", bits: 16, chCode: chLeftSide,
 			build: func(bw *bitio.Writer) {
-				writeVerbatim(bw, repeatI32(-32768, n), 0, 16)
-				writeVerbatim(bw, repeatI32(-65535, n), 0, 17)
+				writeVerbatim(bw, slices.Repeat([]int32{-32768}, n), 0, 16)
+				writeVerbatim(bw, slices.Repeat([]int32{-65535}, n), 0, 17)
 			},
-			want: [][]int32{repeatI32(-32768, n), repeatI32(32767, n)},
+			want: [][]int32{slices.Repeat([]int32{-32768}, n), slices.Repeat([]int32{32767}, n)},
 		},
 		{
 			name: "28-bit independent", bits: 28, chCode: 0, reject: true,
@@ -283,16 +265,16 @@ func TestDecodeRejectsOutOfRangeSamples(t *testing.T) {
 
 // TestDecodeRangeVerdictAfterCRC checks the reporting order: a frame whose
 // samples are out of range but whose CRC-16 is broken reports ErrCRCMismatch,
-// because a bit flip in a real stream must keep its corruption verdict, and
-// FindNextFrame classifies false syncs by it.
+// so a bit flip in a real stream keeps its corruption verdict.
 func TestDecodeRangeVerdictAfterCRC(t *testing.T) {
-	c := rangeCases()[0]
-	if !c.reject {
-		t.Fatal("row 0 must be an out-of-range frame")
+	var c rangeCase
+	for _, rc := range rangeCases() {
+		if rc.name == "lpc narrow route" {
+			c = rc
+		}
 	}
-	// Precondition: this really is the narrow-route fixture.
-	if !i32.LPCRestoreNarrowSafe(lpcNarrowRowCoeffs, 16, 15) {
-		t.Fatal("fixture must take the narrow restore route")
+	if !c.reject {
+		t.Fatal("fixture \"lpc narrow route\" missing or not an out-of-range frame")
 	}
 	raw := c.bytes()
 	raw[len(raw)-1] ^= 0xff

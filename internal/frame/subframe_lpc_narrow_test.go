@@ -22,7 +22,7 @@ func TestDecodeLPCSubframe_WideRouteAtPredicateEdge(t *testing.T) {
 		n     = 12
 		shift = 1
 	)
-	warm := repeatI64(-(1 << (bps - 1)), order)
+	warm := slices.Repeat([]int64{-(1 << (bps - 1))}, order)
 	want := append(slices.Clone(warm), make([]int64, n-order)...) // predicted samples are all 0
 	res := make([]int64, n-order)
 	for i := order; i < n; i++ {
@@ -32,8 +32,9 @@ func TestDecodeLPCSubframe_WideRouteAtPredicateEdge(t *testing.T) {
 		}
 		res[i-order] = want[i] - acc>>shift
 	}
-	if want := int64(1) << 30; res[0] != -want {
-		t.Fatalf("first residual = %d, want %d: the fixture no longer sits at the predicate edge", res[0], -want)
+	const edge = int64(1) << 30
+	if res[0] != -edge {
+		t.Fatalf("first residual = %d, want %d: the fixture no longer sits at the predicate edge", res[0], -edge)
 	}
 
 	bw := bitio.NewWriter()
