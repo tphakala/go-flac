@@ -10,9 +10,8 @@ import (
 // readBlock is the default owned read-buffer size, used by NewReader and by Reset on
 // a zero-value Reader. It is large enough to amortize the underlying src.Read and feed
 // the 64-bit bulk-load fast path many consecutive whole words, yet small enough to
-// stay L1/L2 friendly. That is why it stays small: a reader built for every frame
-// pays for it on every construction. A long-lived reader over a file asks for a
-// larger block through NewReaderSize.
+// stay L1/L2 friendly. A long-lived reader over a file asks for a larger block
+// through NewReaderSize.
 const readBlock = 1 << 13 // 8 KiB
 
 // minReadBlock is the smallest block NewReaderSize allows. readMore compacts an

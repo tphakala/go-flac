@@ -337,6 +337,12 @@ type FrameDecoder struct {
 	bytesPS int
 	frame   frame.Frame
 	out     []byte
+
+	// rd and br are rebound to each frame by DecodeInterleaved, so steady-state
+	// decode allocates nothing. br starts as a zero value and gets the bitio default
+	// 8 KiB block on its first Reset; a larger frame takes several refills.
+	rd bytes.Reader
+	br bitio.Reader
 }
 
 // NewFrameDecoder parses the 34-byte STREAMINFO body (an MP4 dfLa payload) and
@@ -353,11 +359,17 @@ func NewFrameDecoder(streamInfo []byte) (*FrameDecoder, error) {
 // DecodeInterleaved decodes exactly one native FLAC frame into interleaved
 // little-endian PCM and returns the block size in inter-channel samples. The
 // returned slice aliases an internal buffer reused across calls; the caller copies
-// it before the next call. It rejects a frame whose channel count disagrees with
-// the STREAMINFO.
+// it before the next call. It does not retain f after it returns. It rejects a
+// frame whose channel count disagrees with the STREAMINFO.
 func (d *FrameDecoder) DecodeInterleaved(f []byte) (pcm []byte, blockSize int, err error) {
-	br := bitio.NewReader(bytes.NewReader(f))
-	if err := frame.Decode(br, d.si, &d.frame); err != nil {
+	d.rd.Reset(f)
+	d.br.Reset(&d.rd)
+	err = frame.Decode(&d.br, d.si, &d.frame)
+	// Drop the caller's frame now, on success and error alike: a demuxer may pass a
+	// subslice of a large container buffer, and holding it until the next call would
+	// keep that whole buffer alive. br keeps only its own copy of the bytes.
+	d.rd.Reset(nil)
+	if err != nil {
 		return nil, 0, fmt.Errorf("go-flac/pcm: FrameDecoder.DecodeInterleaved: %w", err)
 	}
 	// frame.Decode resolves a frame header's "from STREAMINFO" (0) rate/bit-depth
