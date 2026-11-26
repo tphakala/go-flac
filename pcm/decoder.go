@@ -651,8 +651,9 @@ func (d *Decoder) decodeNextFrame() error {
 // the decoded frame fr declares a sample rate, channel count or bit depth other
 // than si, and nil otherwise. frame.Decode resolves a header's "from STREAMINFO"
 // (code 0) rate and depth to the STREAMINFO values, so a conforming frame always
-// matches; a frame that explicitly declares other values cannot be packed by
-// appendPacked, which uses the STREAMINFO channel count and byte width. Callers
+// matches; a frame that explicitly declares other values cannot be delivered as
+// STREAMINFO-layout PCM: appendPacked packs the frame's own channels at the
+// STREAMINFO byte width, while callers interleave by Info().Channels. Callers
 // run it only on a frame frame.Decode accepted, so CRC and sample-range verdicts
 // keep precedence. The seek probe (frame.FindNextFrame) deliberately does not
 // call it, so frame positions stay findable in a stream that changes format.
