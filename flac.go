@@ -39,6 +39,13 @@ var (
 	ErrSampleOutOfRange = errors.New("go-flac: decoded sample outside the frame bit depth")
 	// ErrInvalidSeek means SeekToSample was called with a negative sample index.
 	ErrInvalidSeek = errors.New("go-flac: invalid seek (negative sample index)")
+	// ErrStreamInfoMismatch means a frame passed its CRC checks but its header
+	// declares a sample rate, channel count or bit depth other than the STREAMINFO
+	// values. The pcm decoders pack every frame at the STREAMINFO channel count and
+	// sample width, so they reject such a frame rather than deliver samples in
+	// another layout; the reference flac command-line decoder rejects these frames
+	// too. A stream that changes format mid-stream stops at its first such frame.
+	ErrStreamInfoMismatch = errors.New("go-flac: frame sample rate, channel count or bit depth disagrees with STREAMINFO")
 )
 
 // StreamInfo describes a FLAC stream's global properties, mirroring the
