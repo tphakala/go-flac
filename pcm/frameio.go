@@ -361,8 +361,9 @@ func NewFrameDecoder(streamInfo []byte) (*FrameDecoder, error) {
 // DecodeInterleaved decodes exactly one native FLAC frame into interleaved
 // little-endian PCM and returns the block size in inter-channel samples. The
 // returned slice aliases an internal buffer reused across calls; the caller copies
-// it before the next call. It does not retain f after it returns. It rejects a
-// frame whose channel count disagrees with the STREAMINFO. A frame cut short
+// it before the next call. It does not retain f after it returns. A frame whose
+// sample rate, channel count or bit depth disagrees with the STREAMINFO returns an
+// error wrapping flac.ErrStreamInfoMismatch. A frame cut short
 // returns an error wrapping flac.ErrTruncatedStream. A frame whose decoded
 // samples fall outside its bit depth, or whose Rice residual is outside the
 // signed 32-bit range, returns an error wrapping flac.ErrSampleOutOfRange.
@@ -382,14 +383,8 @@ func (d *FrameDecoder) DecodeInterleaved(f []byte) (pcm []byte, blockSize int, e
 		}
 		return nil, 0, fmt.Errorf("go-flac/pcm: FrameDecoder.DecodeInterleaved: %w", err)
 	}
-	// frame.Decode resolves a frame header's "from STREAMINFO" (0) rate/bit-depth
-	// codes to the STREAMINFO values, so a conforming frame always matches here; a
-	// frame that explicitly encodes a different rate, channel count, or bit depth is
-	// a malformed container and is rejected rather than mis-packed by appendPacked,
-	// which uses the STREAMINFO byte width.
-	if len(d.frame.Channels) != d.si.Channels || d.frame.SampleRate != d.si.SampleRate || d.frame.BitsPerSample != d.si.BitDepth {
-		return nil, 0, fmt.Errorf("go-flac/pcm: FrameDecoder.DecodeInterleaved: frame (%d Hz, %d ch, %d bps) disagrees with STREAMINFO (%d Hz, %d ch, %d bps)",
-			d.frame.SampleRate, len(d.frame.Channels), d.frame.BitsPerSample, d.si.SampleRate, d.si.Channels, d.si.BitDepth)
+	if err := checkFrameStreamInfo("FrameDecoder.DecodeInterleaved", &d.frame, d.si); err != nil {
+		return nil, 0, err
 	}
 	d.out = appendPacked(d.out[:0], &d.frame, d.bytesPS)
 	return d.out, d.frame.BlockSize, nil

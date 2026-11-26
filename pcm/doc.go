@@ -20,6 +20,14 @@
 // error, and the one-shot DecodeInterleaved returns no data.
 // SeekToSample skips such a frame as it skips one with a bad CRC.
 //
+// A frame whose header declares a sample rate, channel count or bit depth other
+// than the STREAMINFO values is rejected with an error wrapping
+// flac.ErrStreamInfoMismatch, as the reference flac decoder rejects it: every
+// frame is packed at the STREAMINFO channel count and width, so a stream that
+// changes format mid-stream cannot be delivered as one PCM stream. The error is
+// sticky in the same way. SeekToSample does not skip such a frame: a seek whose
+// target lies in it fails with the same error.
+//
 // Native output is right-aligned at the stream's own bit depth in ceil(bits/8)
 // bytes per sample, so 12-bit audio arrives in 2-byte samples at 12-bit scale.
 // WithConvertTo normalises to a fixed width (8, 16, 24 or 32 bits) by shifting,

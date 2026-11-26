@@ -84,8 +84,8 @@ func SkipMD5Verification() DecoderOption {
 // (not its container width), so a 12-bit stream converted to 16 is scaled up by 4 bits.
 // Widening is exact; narrowing truncates with an arithmetic shift (no rounding, no
 // dither). 8-bit output is signed, like FLAC's native 8-bit and go-wav's WithConvertTo.
-// A frame whose header declares a depth other than the STREAMINFO depth is scaled as if
-// it were at the stream depth, as it is already packed at that width.
+// A frame whose header declares a depth other than the STREAMINFO depth is rejected with
+// flac.ErrStreamInfoMismatch before any conversion.
 //
 // Info() is unaffected and keeps describing the stream, including its native BitDepth;
 // OutputBitDepth reports the converted width. MD5 verification runs on the native
@@ -352,6 +352,13 @@ var errSeekFrameCut = fmt.Errorf("%w: %w", flac.ErrTruncatedStream, io.ErrUnexpe
 // frame still lands, and reading on reports the truncation when it reaches the cut
 // frame.
 //
+// A seek whose target lies in a frame that declares a sample rate, channel count or bit
+// depth other than STREAMINFO fails with an error wrapping flac.ErrStreamInfoMismatch,
+// in the hard-failed state described below; the search does not skip such a frame the
+// way it skips one with a bad CRC. A disagreeing frame the search passes on the way does
+// not stop it, so a target in an earlier or later frame that agrees with STREAMINFO
+// still lands, and reading on from there fails at the next frame that disagrees.
+//
 // A seek that fails after those two argument checks leaves the decoder in a hard-failed
 // state, whether the failure came from the source (an I/O error while probing) or from
 // the stream itself (a frame that will not decode at the landing offset, or a frame the
@@ -564,6 +571,9 @@ func (d *Decoder) land(landStart, target, fs int64) (int64, error) {
 	if err := frame.Decode(d.br, d.info, &d.frame); err != nil {
 		return 0, err
 	}
+	if err := checkFrameStreamInfo("Decoder.SeekToSample", &d.frame, d.info); err != nil {
+		return 0, err
+	}
 	d.packFrame(false) // seeked is set above, so no hashing
 	if target < fs {
 		target = fs // overshoot clamp: land at the frame start
@@ -626,11 +636,34 @@ func (d *Decoder) decodeNextFrame() error {
 		d.err = err
 		return err
 	}
+	if err := checkFrameStreamInfo("Decoder", &d.frame, d.info); err != nil {
+		d.err = err
+		return err
+	}
 	d.decoded += uint64(d.frame.BlockSize)
 	// MD5 is meaningless once frames have been skipped, or when opted out.
 	d.packFrame(!d.seeked && !d.skipMD5)
 	d.pending = d.buf
 	return nil
+}
+
+// checkFrameStreamInfo returns an error wrapping flac.ErrStreamInfoMismatch when
+// the decoded frame fr declares a sample rate, channel count or bit depth other
+// than si, and nil otherwise. frame.Decode resolves a header's "from STREAMINFO"
+// (code 0) rate and depth to the STREAMINFO values, so a conforming frame always
+// matches; a frame that explicitly declares other values cannot be delivered as
+// STREAMINFO-layout PCM: appendPacked packs the frame's own channels at the
+// STREAMINFO byte width, while callers interleave by Info().Channels. Callers
+// run it only on a frame frame.Decode accepted, so CRC and sample-range verdicts
+// keep precedence. The seek probe (frame.FindNextFrame) deliberately does not
+// call it, so frame positions stay findable in a stream that changes format.
+// op names the caller in the error text.
+func checkFrameStreamInfo(op string, fr *frame.Frame, si flac.StreamInfo) error {
+	if len(fr.Channels) == si.Channels && fr.SampleRate == si.SampleRate && fr.BitsPerSample == si.BitDepth {
+		return nil
+	}
+	return fmt.Errorf("go-flac/pcm: %s: frame (%d Hz, %d ch, %d bps) disagrees with STREAMINFO (%d Hz, %d ch, %d bps): %w",
+		op, fr.SampleRate, len(fr.Channels), fr.BitsPerSample, si.SampleRate, si.Channels, si.BitDepth, flac.ErrStreamInfoMismatch)
 }
 
 // packFrame packs d.frame into d.buf at the output width. When hashNative is set it first

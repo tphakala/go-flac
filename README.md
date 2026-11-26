@@ -44,6 +44,9 @@ its bit depth, or carries a Rice residual outside the signed 32-bit range, is
 rejected with `flac.ErrSampleOutOfRange`. libFLAC also rejects decoded output
 outside the frame bit depth, and go-flac additionally checks each subframe at its
 own width.
+A frame whose sample rate, channel count or bit depth disagrees with STREAMINFO is
+rejected with `flac.ErrStreamInfoMismatch`, as `flac -d` does, so a stream that
+changes format mid-stream stops at its first such frame.
 The decoder uses a 64-bit bulk-refill bit reader with no
 per-byte interface dispatch and allocates only a single reusable 64 KiB read
 buffer per stream, so a file can be passed without a `bufio` wrapper (which

@@ -296,8 +296,8 @@ func TestFrameDecoderErrors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewFrameDecoder: %v", err)
 		}
-		if _, _, err := dec.DecodeInterleaved(frames[0]); err == nil {
-			t.Error("expected a channel-count mismatch error decoding a mono frame as stereo")
+		if _, _, err := dec.DecodeInterleaved(frames[0]); !errors.Is(err, flac.ErrStreamInfoMismatch) {
+			t.Errorf("DecodeInterleaved error = %v, want flac.ErrStreamInfoMismatch", err)
 		}
 	})
 
