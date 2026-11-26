@@ -7,4 +7,4 @@ require (
 	github.com/tphakala/simd v1.16.0
 )
 
-require golang.org/x/sys v0.49.0 // indirect
+require golang.org/x/sys v0.50.0 // indirect
