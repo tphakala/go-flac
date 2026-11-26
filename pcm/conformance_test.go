@@ -3,10 +3,13 @@ package pcm
 import (
 	"bytes"
 	"crypto/md5"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	flac "github.com/tphakala/go-flac"
 )
 
 const corpusRoot = "../testdata/flac-test-files"
@@ -52,9 +55,50 @@ var m4ResyncDeferred = map[string]bool{
 	"11 - file starting with unparsable data.flac": true,
 }
 
+// streamInfoMismatchAt lists corpus files with a frame whose rate, channel count
+// or bit depth disagrees with STREAMINFO, keyed by base name, with the first
+// disagreeing inter-channel sample as reported by flac 1.5.0 `flac -d`. The
+// decoder must deliver exactly the samples before it and then fail with
+// flac.ErrStreamInfoMismatch.
+var streamInfoMismatchAt = map[string]int64{
+	"01 - changing samplerate.flac":           163840,
+	"02 - increasing number of channels.flac": 147456,
+	"03 - decreasing number of channels.flac": 180224,
+	"04 - changing bitdepth.flac":             139264,
+	"03 - wrong bit depth.flac":               0,
+	"04 - wrong number of channels.flac":      0,
+}
+
+// assertStreamInfoMismatchAt decodes the file with MD5 verification on and checks
+// that it stops with flac.ErrStreamInfoMismatch after exactly first samples.
+func assertStreamInfoMismatchAt(t *testing.T, path string, first int64) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDecoder(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("%s: NewDecoder: %v", path, err)
+	}
+	got, err := io.ReadAll(d)
+	if !errors.Is(err, flac.ErrStreamInfoMismatch) {
+		t.Fatalf("%s: error = %v, want flac.ErrStreamInfoMismatch", path, err)
+	}
+	info := d.Info()
+	want := first * int64(info.Channels) * int64((info.BitDepth+7)/8)
+	if int64(len(got)) != want {
+		t.Fatalf("%s: delivered %d bytes before the error, want %d", path, len(got), want)
+	}
+}
+
 func TestConformanceUncommon(t *testing.T) {
 	runCorpusDir(t, filepath.Join(corpusRoot, "uncommon"), func(t *testing.T, path string) {
 		t.Helper()
+		if first, ok := streamInfoMismatchAt[filepath.Base(path)]; ok {
+			assertStreamInfoMismatchAt(t, path, first)
+			return
+		}
 		if m4ResyncDeferred[filepath.Base(path)] {
 			t.Logf("M2-deferred (M4 resync): %s must error without panic, not decode", filepath.Base(path))
 			assertErrorsNoPanic(t, path)
@@ -84,6 +128,10 @@ func assertErrorsNoPanic(t *testing.T, path string) {
 func TestConformanceFaultyNoPanic(t *testing.T) {
 	runCorpusDir(t, filepath.Join(corpusRoot, "faulty"), func(t *testing.T, path string) {
 		t.Helper()
+		if first, ok := streamInfoMismatchAt[filepath.Base(path)]; ok {
+			assertStreamInfoMismatchAt(t, path, first)
+			return
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

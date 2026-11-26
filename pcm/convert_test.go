@@ -517,44 +517,6 @@ func TestDecodeResetReuseAllocsWithConvertTo(t *testing.T) {
 	}
 }
 
-// patchStreamInfoDepth returns a copy of stream whose STREAMINFO bits-per-sample
-// field is set to bits. STREAMINFO layout after "fLaC" and the 4-byte block header:
-// bytes 10-12 carry the sample rate (20 bits), channels-1 (3 bits) and the high bit
-// of bits-1; byte 13 carries the low 4 bits of bits-1, then the sample total.
-func patchStreamInfoDepth(stream []byte, bits int) []byte {
-	out := bytes.Clone(stream)
-	const si = 8
-	v := uint(bits - 1)
-	out[si+12] = out[si+12]&^0x01 | byte(v>>4)
-	out[si+13] = out[si+13]&0x0f | byte(v&0x0f)<<4
-	return out
-}
-
-// TestWithConvertToUsesStreamInfoDepth pins that the shift is relative to the STREAMINFO
-// depth even when the frames declare their own: a 16-bit stream whose STREAMINFO says
-// 24 is packed at 3 bytes, and converting to 32 shifts it by 8, not by 16.
-func TestWithConvertToUsesStreamInfoDepth(t *testing.T) {
-	stream, _ := convStream(t, 16, 2, 6000)
-	patched := patchStreamInfoDepth(stream, 24)
-	d, err := NewDecoder(bytes.NewReader(patched), SkipMD5Verification())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Info().BitDepth != 24 {
-		t.Fatalf("patched STREAMINFO depth = %d, want 24", d.Info().BitDepth)
-	}
-	native := unpackLE(decodeOpts(t, patched, SkipMD5Verification()), 3)
-	got := unpackLE(decodeOpts(t, patched, SkipMD5Verification(), WithConvertTo(32)), 4)
-	if len(native) == 0 || len(got) != len(native) {
-		t.Fatalf("got %d samples, native %d", len(got), len(native))
-	}
-	for i, v := range native {
-		if want := refConvert(v, 24, 32); got[i] != want {
-			t.Fatalf("sample %d: native %d -> %d, want %d (shift must follow STREAMINFO depth)", i, v, got[i], want)
-		}
-	}
-}
-
 func TestOutputBitDepthWithoutOption(t *testing.T) {
 	for _, bits := range []int{12, 24} {
 		stream, _ := convStream(t, bits, 2, 2000)
@@ -570,8 +532,16 @@ func TestOutputBitDepthWithoutOption(t *testing.T) {
 
 func FuzzDecodeConvert(f *testing.F) {
 	base, _ := buildRamp(2, 16, 4096*3+50)
+	// A mono tail behind stereo frames disagrees with STREAMINFO from its first frame.
+	mono, _ := buildRamp(1, 16, 4097)
+	md, err := NewDecoder(bytes.NewReader(mono))
+	if err != nil {
+		panic(err)
+	}
+	mixed := slices.Concat(base, mono[md.audioStart:])
 	for sel := range uint8(4) {
 		f.Add(base, sel)
+		f.Add(mixed, sel)
 	}
 	f.Fuzz(func(t *testing.T, data []byte, sel uint8) {
 		dst := []int{8, 16, 24, 32}[sel%4]
@@ -581,8 +551,8 @@ func FuzzDecodeConvert(f *testing.F) {
 		}
 		var buf bytes.Buffer
 		_, _ = d.WriteTo(&buf) // an error is fine; a panic is not
-		if buf.Len()%(dst/8) != 0 {
-			t.Fatalf("output length %d is not a multiple of %d", buf.Len(), dst/8)
+		if frame := d.Info().Channels * dst / 8; buf.Len()%frame != 0 {
+			t.Fatalf("output length %d is not a whole number of %d-byte inter-channel samples", buf.Len(), frame)
 		}
 	})
 }
