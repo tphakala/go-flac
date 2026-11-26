@@ -50,6 +50,7 @@ A change that violates one of these is wrong even if tests pass.
    - `ErrMissingStreamInfo`: no STREAMINFO block, or not first.
    - `ErrTruncatedStream`: stream ended before the declared sample count, or a frame body was cut short (mid-frame truncation also wraps `io.ErrUnexpectedEOF`).
    - `ErrSeekUnsupported` (source is not an `io.Seeker`), `ErrInvalidSeek` (negative index), `ErrEncoderClosed` (write after `Close`).
+   - `ErrStreamInfoMismatch`: a CRC-valid frame whose header declares a sample rate, channel count or bit depth other than STREAMINFO. `Decoder` rejects it on every path (Read, WriteTo, the one-shots and the SeekToSample landing frame) and it is sticky like a CRC failure; the seek search does not skip it. `FrameDecoder` rejects it per frame. Corruption or a mid-stream format change, not a limit.
    - `pcm.ErrDecodeLimit`: a resource limit, not a verdict on the stream. Keep it distinct from the corruption errors.
 7. **Correct on 32-bit.** `int` is 32 bits on 386 and arm. Sizes, sample counts and Rice cost accumulators use explicit 64-bit types where they can exceed 2^31. CI runs the Rice package as a 386 binary and the golden generator uses `uint32` arithmetic so hashes hold on every word size. 32-bit ARM has its own LPC restore order cutover (`restore_order_arm.go`); keep it consistent with the routing boundary the tests derive.
 8. **MD5 semantics.** The encoder hashes the input and writes the digest into STREAMINFO on `Close` when the sink is an `io.WriteSeeker`. A non-seekable sink, or `Config.SkipMD5`, leaves the all-zero "unknown" MD5, which is spec-legal. The decoder verifies MD5 unless `SkipMD5Verification` is passed, and verifies on the native samples even under `WithConvertTo`. A seek disables the end-of-stream MD5 and sample-count checks; a frame cut short still reports `ErrTruncatedStream` from `Read`; the `SeekToSample` godoc says when a seek reports it too. These options apply to one `NewDecoder` or `Reset` call and are not remembered across `Reset`.
@@ -142,6 +143,7 @@ Flag these, they are real defects here:
 - A panic, index error, or unbounded allocation reachable from stream bytes, in the decoder, `internal/meta`, `internal/frame` or `internal/bitio`.
 - A count or length from the stream trusted before it is checked against the bytes present, or an overflow on 32-bit (`int` arithmetic on a sample count, byte offset or cost accumulator).
 - A corrupt stream reported as `ErrDecodeLimit` or `ErrUnsupported`, or a limit reported as corruption; a returned error that does not wrap a sentinel where one applies.
+- A frame delivered by `Decoder` whose sample rate, channel count or bit depth differs from STREAMINFO, or a geometry check that runs before `frame.Decode`'s CRC verdict.
 - A decoded sample outside the frame's bit depth, or a Rice residual of 2^32 or more once zigzag-folded, returned without `ErrSampleOutOfRange`.
 - An end-of-stream MD5 or sample-count check that runs after a seek, or is skipped when it should run.
 - An allocation on the per-frame decode path or the steady-state encode path, or a `Reset` that leaves state from the previous stream behind.
@@ -158,6 +160,7 @@ Intentional, do not flag:
 - Different LPC restore cutover orders per architecture; they are measured per-architecture.
 - Compression ratio matching libFLAC but throughput trailing it; the README states this.
 - Large `_test.go` files and many small test helpers across the `pcm` package.
+- Rejecting a stream that changes sample rate, channel count or bit depth mid-stream (IETF `uncommon/01` to `04`) with `ErrStreamInfoMismatch`; `flac -d` rejects the same frames. The seek search does not skip such frames, unlike `ErrSampleOutOfRange` frames.
 - Rejecting a crafted frame with `ErrSampleOutOfRange` that libFLAC accepts because its wasted-bits shift or 32-bit arithmetic wraps the bad sample back into range. The range check runs per subframe at its effective width so the verdict does not depend on the LPC restore route; no conforming encoder writes such a frame.
 
 ## Things that do not belong in the repo
