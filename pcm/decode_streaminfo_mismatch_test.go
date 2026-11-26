@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	flac "github.com/tphakala/go-flac"
@@ -85,7 +86,7 @@ func TestDecoderRejectsStreamInfoMismatch(t *testing.T) {
 						t.Fatalf("error %v is also reported as ErrDecodeLimit", err)
 					}
 					for _, want := range []string{geometry(48000, 2, 16), geometry(tail.cfg.SampleRate, tail.cfg.Channels, tail.cfg.BitDepth)} {
-						if !bytes.Contains([]byte(err.Error()), []byte(want)) {
+						if !strings.Contains(err.Error(), want) {
 							t.Errorf("error %q lacks %s", err, want)
 						}
 					}
@@ -143,7 +144,7 @@ func TestDecoderStreamInfoMismatchMidStream(t *testing.T) {
 	readAll := func(t *testing.T, d *Decoder, want []byte, wantErr bool) {
 		t.Helper()
 		got, err := io.ReadAll(d)
-		if wantErr != errors.Is(err, flac.ErrStreamInfoMismatch) || (!wantErr && err != nil) {
+		if wantErr && !errors.Is(err, flac.ErrStreamInfoMismatch) || !wantErr && err != nil {
 			t.Fatalf("ReadAll error = %v, want mismatch=%v", err, wantErr)
 		}
 		if !bytes.Equal(got, want) {
